@@ -11,7 +11,7 @@ type Row = Invoice & { key: string }
 
 /**
  * 发票管理：列表展示 + 排序切换 + 空状态引导 + 上传入口。
- * 数据来自 mock 后端服务（store.loadInvoices 拉取 /api/invoices）。
+ * 数据来自后端服务（Next.js，store.loadInvoices 拉取 /api/invoices）。
  */
 export default function Invoices() {
   const invoices = useAppStore((s) => s.invoices)
@@ -52,8 +52,8 @@ export default function Invoices() {
       title: '预览',
       key: 'preview',
       render: (_, row) =>
-        row.fileUrl ? (
-          <a href={row.fileUrl} target="_blank" rel="noreferrer">
+        row.id ? (
+          <a href={`/api/invoices/${row.id}/file`} target="_blank" rel="noreferrer">
             查看
           </a>
         ) : (

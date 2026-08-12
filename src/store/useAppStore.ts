@@ -43,10 +43,8 @@ interface AppState {
   addInvoice: (input: {
     ownerName: string
     invoiceDate: string
-    fileName: string
-    fileType: string
-    /** 文件 base64 DataURL（上传时发给 mock 服务，由其解码落盘） */
-    fileDataUrl: string
+    /** 原始文件对象，用 multipart/form-data 上传 */
+    file: File
     note?: string
   }) => Promise<void>
   login: (username: string) => void
@@ -80,7 +78,7 @@ export const useAppStore = create<AppState>((set) => ({
       return { transactions: [tx, ...state.transactions], accounts }
     }),
 
-  // 从 mock 服务拉取发票列表（发票页挂载时调用）
+  // 从后端服务拉取发票列表（发票页挂载时调用）
   loadInvoices: async () => {
     try {
       const res = await fetch('/api/invoices')
@@ -92,14 +90,15 @@ export const useAppStore = create<AppState>((set) => ({
     }
   },
 
-  // 上传一张发票到 mock 服务：POST /api/invoices（内含 base64 文件内容）
-  // 服务解码后存盘，返回带 fileUrl 的记录；前端只保存元数据，不再持有 base64
+  // 上传一张发票到后端服务：POST /api/invoices（multipart/form-data，文件以二进制流上传）
+  // 后端接收后落盘 + 写 MySQL，返回带 storagePath 的记录
   addInvoice: async (input) => {
-    const res = await fetch('/api/invoices', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    })
+    const fd = new FormData()
+    fd.append('ownerName', input.ownerName)
+    fd.append('invoiceDate', input.invoiceDate)
+    if (input.note) fd.append('note', input.note)
+    fd.append('file', input.file)
+    const res = await fetch('/api/invoices', { method: 'POST', body: fd })
     if (!res.ok) throw new Error('上传失败')
     const saved = (await res.json()) as Invoice
     set((state) => ({ invoices: [saved, ...state.invoices] }))

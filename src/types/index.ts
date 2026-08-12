@@ -77,8 +77,8 @@ export interface Invoice {
   fileName: string
   /** MIME 类型，如 image/png、application/pdf */
   fileType: string
-  /** 预览/下载地址（由后端返回，如 /api/invoices/:id/file）。纯前端练习用 mock 服务提供 */
-  fileUrl?: string
+  /** 文件在后端存储的相对路径（如 /uploads/inv-xxx.pdf），预览走 /api/invoices/:id/file */
+  storagePath?: string
   /** 上传日期 YYYY-MM-DD */
   uploadedAt: string
   /** 发票开票日期 YYYY-MM-DD（用于「按发票日期」排序） */

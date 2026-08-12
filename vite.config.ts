@@ -16,10 +16,10 @@ export default defineConfig({
     },
   },
   server: {
-    // 开发时代理：把前端的 /api 请求转发到本地 mock 服务(8787)
+    // 开发时代理：把前端的 /api 请求转发到后端服务(Next.js, 端口 4000)
     // 这样前端用相对路径 /api/... 即可，无需处理跨域(CORS)
     proxy: {
-      '/api': 'http://localhost:8787',
+      '/api': 'http://localhost:4000',
     },
   },
 })

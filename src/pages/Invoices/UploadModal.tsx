@@ -14,7 +14,8 @@ interface UploadModalProps {
 interface SelectedFile {
   name: string
   type: string
-  dataUrl: string
+  /** 原始 File 对象，提交时放进 FormData 用 multipart 上传 */
+  file: File
 }
 
 const MAX_SIZE_MB = 10
@@ -61,7 +62,8 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
     setFileList(next.slice(-1)) // maxCount=1，只保留最后一个
   }
 
-  // 完全接管上传：校验 -> 读成 base64 -> 标记成功（让 antd 显示「已选」）
+  // 完全接管上传：仅做前端校验（类型/大小），通过后记录原始 File 对象，
+  // 真正的上传在 onFinish 里用 FormData 以 multipart 提交到后端。
   const customRequest: UploadProps['customRequest'] = (options) => {
     const file = options.file as File
     const isAllowed = file.type === 'application/pdf' || file.type.startsWith('image/')
@@ -76,16 +78,9 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
       options.onError?.(new Error('文件过大'))
       return
     }
-    const reader = new FileReader()
-    reader.onload = () => {
-      setSelected({ name: file.name, type: file.type, dataUrl: reader.result as string })
-      options.onSuccess?.({})
-    }
-    reader.onerror = () => {
-      message.error('文件读取失败，请重试')
-      options.onError?.(new Error('读取失败'))
-    }
-    reader.readAsDataURL(file)
+    // 校验通过：保存原始 File，标记成功让 antd 显示「已选」
+    setSelected({ name: file.name, type: file.type, file })
+    options.onSuccess?.({})
   }
 
   const onFinish = async (values: { ownerName: string; invoiceDate: dayjs.Dayjs; note?: string }) => {
@@ -94,7 +89,7 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
       invoiceDate: values.invoiceDate?.format('YYYY-MM-DD'),
       hasSelected: !!selected,
       fileType: selected?.type,
-      dataUrlLen: selected?.dataUrl?.length,
+      fileSize: selected?.file?.size,
     })
     // 兜底校验：防止「没选文件却点了存档」时静默无反应
     if (!selected) {
@@ -104,13 +99,11 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
     }
     setSubmitting(true)
     try {
-      console.log('[UploadModal] 开始 POST /api/invoices ...')
+      console.log('[UploadModal] 开始 POST /api/invoices (multipart) ...')
       await addInvoice({
         ownerName: values.ownerName.trim(),
         invoiceDate: values.invoiceDate.format('YYYY-MM-DD'),
-        fileName: selected.name,
-        fileType: selected.type,
-        fileDataUrl: selected.dataUrl,
+        file: selected.file,
         note: values.note?.trim(),
       })
       console.log('[UploadModal] 上传成功，发票已写入后端')
@@ -119,7 +112,7 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
     } catch (e) {
       console.error('[UploadModal] 上传异常：', e)
       const msg = e instanceof Error ? e.message : '未知错误'
-      message.error(`上传失败：${msg}（请确认 mock 服务已启动：pnpm dev:all）`)
+      message.error(`上传失败：${msg}（请确认后端服务已启动：pnpm dev）`)
     } finally {
       setSubmitting(false)
     }
