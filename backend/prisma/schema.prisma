@@ -21,6 +21,9 @@ model Invoice {
   uploadedAt  DateTime @default(now()) // 上传时间（系统记录）
   note        String? // 备注（可选）
   storagePath String // 落盘后的相对路径，如 /uploads/inv-xxx.pdf
+  parseStatus String   @default("pending") // 解析状态：pending | done | failed
+  parsedData  Json?                     // 本地解析（PDF/OFD）出的结构化字段
+  parseError  String?                   // 解析失败时的错误信息
 
   @@map("invoices")
 }

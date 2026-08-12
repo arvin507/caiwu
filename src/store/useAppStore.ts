@@ -54,6 +54,14 @@ interface AppState {
     file: File
     note?: string
   }) => Promise<void>
+  /** 人工核对写回：PATCH /api/invoices/:id 更新解析结果/状态，并合并回列表 */
+  updateInvoice: (id: string, patch: {
+    parsedData?: Record<string, unknown> | null
+    parseStatus?: 'pending' | 'done' | 'failed'
+    parseError?: string | null
+  }) => Promise<void>
+  /** 删除发票：DELETE /api/invoices/:id（元数据 + 落盘文件），成功后从列表移除 */
+  deleteInvoice: (id: string) => Promise<void>
 
   // 鉴权相关
   login: (username: string, password: string) => Promise<void>
@@ -121,6 +129,33 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!res.ok) throw new Error('上传失败')
     const saved = (await res.json()) as Invoice
     set((state) => ({ invoices: [saved, ...state.invoices] }))
+  },
+
+  // 人工核对写回：PATCH /api/invoices/:id，成功后把最新数据合并回列表
+  updateInvoice: async (id, patch) => {
+    const res = await fetch(`/api/invoices/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(err.error || '保存失败')
+    }
+    const updated = (await res.json()) as Invoice
+    set((state) => ({
+      invoices: state.invoices.map((i) => (i.id === id ? updated : i)),
+    }))
+  },
+
+  // 删除发票：DELETE /api/invoices/:id，成功后从列表移除该条
+  deleteInvoice: async (id) => {
+    const res = await fetch(`/api/invoices/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(err.error || '删除失败')
+    }
+    set((state) => ({ invoices: state.invoices.filter((i) => i.id !== id) }))
   },
 
   // 登录：调后端校验，成功存 token + 用户信息（含 role）

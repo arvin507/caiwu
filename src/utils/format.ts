@@ -25,10 +25,18 @@ export function formatSignedCurrency(amount: number, symbol = '¥'): string {
   return sign + formatCurrency(Math.abs(amount), symbol)
 }
 
-/** 日期格式化：'2026-08-12' -> '2026年08月12日' */
-export function formatDate(iso: string): string {
-  const [y, m, d] = iso.split('-')
-  if (!y || !m || !d) return iso
+/**
+ * 日期格式化：把日期转成「2026年08月12日」。
+ * 兼容两种输入：
+ *  - '2026-08-12'（前端 date 输入 / 纯日期）
+ *  - '2026-08-12T00:00:00.000Z'（后端 Prisma DateTime 序列化的 ISO 字符串）
+ */
+export function formatDate(input: string): string {
+  if (!input) return ''
+  // 后端 DateTime 序列化带 T 和时间，先截取日期部分 YYYY-MM-DD，避免时区偏移与乱码
+  const datePart = input.includes('T') ? input.slice(0, 10) : input
+  const [y, m, d] = datePart.split('-')
+  if (!y || !m || !d) return input
   return `${y}年${m}月${d}日`
 }
 

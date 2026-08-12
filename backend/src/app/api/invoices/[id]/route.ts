@@ -34,3 +34,30 @@ export async function DELETE(
   }
   return NextResponse.json({ ok: true })
 }
+
+// PATCH /api/invoices/:id —— 人工核对写回：更新解析结果/状态
+// 用于前端「人工核对」：OCR/本地解析偶尔抽错，用户改完字段后保存。
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params
+  let body: { parsedData?: unknown; parseStatus?: string; parseError?: unknown }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体不是合法 JSON' }, { status: 400 })
+  }
+
+  // 只构造被显式提供的字段，避免把 undefined 写进数据库
+  const data: Record<string, unknown> = {}
+  if (body.parsedData !== undefined) data.parsedData = body.parsedData
+  if (body.parseStatus !== undefined) data.parseStatus = body.parseStatus
+  if (body.parseError !== undefined) data.parseError = body.parseError
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json({ error: '没有可更新的字段' }, { status: 400 })
+  }
+
+  const updated = await prisma.invoice.update({ where: { id }, data })
+  return NextResponse.json(updated)
+}

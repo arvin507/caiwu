@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { parseInvoice } from '@/lib/invoiceParser'
 import { writeFile, mkdir } from 'fs/promises'
 import path from 'path'
+
+export const runtime = 'nodejs'
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
 
@@ -38,7 +41,7 @@ export async function POST(req: NextRequest) {
   const buffer = Buffer.from(await file.arrayBuffer())
   await writeFile(path.join(UPLOAD_DIR, storageName), buffer)
 
-  // 元数据写 MySQL
+  // 元数据写 MySQL（parseStatus 默认 pending）
   const created = await prisma.invoice.create({
     data: {
       ownerName,
@@ -49,6 +52,22 @@ export async function POST(req: NextRequest) {
       storagePath: `/uploads/${storageName}`,
     },
   })
+
+  // 触发本地解析（PDF / OFD）：先返回 201，后端异步解析，不阻塞上传
+  // 图片类文件会在 parseInvoice 内抛错，状态置为 failed（图片识别后续接 OCR 服务）
+  void parseInvoice(path.join(UPLOAD_DIR, storageName))
+    .then((data) =>
+      prisma.invoice.update({
+        where: { id: created.id },
+        data: { parseStatus: 'done', parsedData: data as any },
+      }),
+    )
+    .catch((e) =>
+      prisma.invoice.update({
+        where: { id: created.id },
+        data: { parseStatus: 'failed', parseError: String(e?.message ?? e) },
+      }),
+    )
 
   return NextResponse.json(created, { status: 201 })
 }

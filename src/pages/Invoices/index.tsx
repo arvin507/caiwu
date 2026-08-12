@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Empty, Segmented, Space, Table, Typography } from 'antd'
+import { Button, Empty, message, Popconfirm, Segmented, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { PlusOutlined } from '@ant-design/icons'
+import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, InvoiceSortKey } from '@/types'
 import { formatDate } from '@/utils/format'
 import UploadModal from './UploadModal'
+import InvoiceDetailDrawer from './InvoiceDetailDrawer'
 
 type Row = Invoice & { key: string }
 
@@ -16,13 +17,48 @@ type Row = Invoice & { key: string }
 export default function Invoices() {
   const invoices = useAppStore((s) => s.invoices)
   const loadInvoices = useAppStore((s) => s.loadInvoices)
+  const deleteInvoice = useAppStore((s) => s.deleteInvoice)
   const [sortKey, setSortKey] = useState<InvoiceSortKey>('uploadedAt')
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const openDetail = (inv: Invoice) => {
+    setActiveInvoice(inv)
+    setDetailOpen(true)
+  }
+
+  // 删除发票：调 store 删除，成功后若恰好是抽屉打开的那张就关掉抽屉
+  const handleDelete = async (id: string) => {
+    setDeletingId(id)
+    try {
+      await deleteInvoice(id)
+      message.success('已删除')
+      if (activeInvoice?.id === id) setDetailOpen(false)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '删除失败')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   // 进入页面时从后端拉取发票列表
   useEffect(() => {
     loadInvoices()
   }, [loadInvoices])
+
+  // 自动轮询：只要还有「解析中」的发票，每 2.5s 刷新一次列表。
+  // 工程目前没有 WebSocket/SSE，用轮询模拟「响应式」——用户无需手动刷新，
+  // 一旦全部解析完（无 pending）轮询自动停止。后续若需秒级推送可改 SSE。
+  const hasPending = invoices.some((i) => i.parseStatus === 'pending')
+  useEffect(() => {
+    if (!hasPending) return
+    const timer = setInterval(() => {
+      loadInvoices()
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [hasPending, loadInvoices])
 
   // 排序：所选字段值大的排前面（最新上传 / 最晚发票日期），降序
   const rows: Row[] = useMemo(() => {
@@ -59,6 +95,45 @@ export default function Invoices() {
         ) : (
           <Typography.Text type="secondary">无文件</Typography.Text>
         ),
+    },
+    {
+      title: '解析状态',
+      key: 'parseStatus',
+      render: (_, row) => {
+        if (row.parseStatus === 'done') return <Tag color="success">已完成</Tag>
+        if (row.parseStatus === 'failed') return <Tag color="error">失败</Tag>
+        if (row.parseStatus === 'pending') return <Tag color="processing">解析中</Tag>
+        return <Tag>未解析</Tag>
+      },
+    },
+    {
+      title: '操作',
+      key: 'action',
+      render: (_, row) => (
+        <Space size="small">
+          <Button type="link" size="small" onClick={() => openDetail(row)}>
+            核对
+          </Button>
+          <Popconfirm
+            title="删除发票"
+            description="删除后不可恢复，确定要删除吗？"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => handleDelete(row.id)}
+          >
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              loading={deletingId === row.id}
+            >
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
     },
     { title: '备注', dataIndex: 'note', key: 'note' },
   ]
@@ -107,6 +182,12 @@ export default function Invoices() {
       )}
 
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
+
+      <InvoiceDetailDrawer
+        open={detailOpen}
+        invoice={activeInvoice}
+        onClose={() => setDetailOpen(false)}
+      />
     </div>
   )
 }
