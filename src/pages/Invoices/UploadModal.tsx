@@ -12,6 +12,7 @@ interface UploadModalProps {
 }
 
 interface SelectedFile {
+  uid: string
   name: string
   type: string
   /** 原始 File 对象，提交时放进 FormData 用 multipart 上传 */
@@ -21,12 +22,13 @@ interface SelectedFile {
 const MAX_SIZE_MB = 10
 
 /**
- * 上传发票弹窗
+ * 上传发票弹窗（支持批量）
  *
  * 规则落地：
  *  - 归属人（ownerName）必填 —— 否则「按人聚合」无意义
  *  - 文件限制 image/* + pdf，且 ≤ 10MB
- *  - 重复上传：本版不做去重（已知限制，见 store.addInvoice 注释）
+ *  - 支持一次多选多张发票，用一个请求批量上传（后端 files[] 循环处理）
+ *  - 重复上传：本版不做去重（已知限制，见 store.addInvoices 注释）
  *
  * 上传逻辑用 customRequest 完全接管（而非 beforeUpload 返回 false）：
  * antd v6 中 beforeUpload 返回 false 时文件可能不进入受控 fileList，
@@ -37,16 +39,16 @@ const MAX_SIZE_MB = 10
  */
 export default function UploadModal({ open, onClose }: UploadModalProps) {
   const { message } = App.useApp()
-  const addInvoice = useAppStore((s) => s.addInvoice)
+  const addInvoices = useAppStore((s) => s.addInvoices)
   const [form] = Form.useForm()
   const [fileList, setFileList] = useState<UploadFile[]>([])
-  const [selected, setSelected] = useState<SelectedFile | null>(null)
+  const [selected, setSelected] = useState<SelectedFile[]>([])
   const [submitting, setSubmitting] = useState(false)
 
   const reset = () => {
     form.resetFields()
     setFileList([])
-    setSelected(null)
+    setSelected([])
     setSubmitting(false)
   }
 
@@ -56,16 +58,18 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
   }
 
   // 把 antd 内部的文件状态同步回受控 fileList，界面才会显示已选文件。
-  // 同时过滤掉「校验失败」的文件（customRequest 里调用了 onError 的那种）。
+  // 同时裁剪 selected——只保留仍在 fileList 里的文件（处理删除）。
   const handleChange: UploadProps['onChange'] = (info) => {
     const next = info.fileList.filter((f) => f.status !== 'error')
-    setFileList(next.slice(-1)) // maxCount=1，只保留最后一个
+    setFileList(next)
+    const uids = new Set(next.map((f) => f.uid))
+    setSelected((prev) => prev.filter((s) => uids.has(s.uid)))
   }
 
   // 完全接管上传：仅做前端校验（类型/大小），通过后记录原始 File 对象，
-  // 真正的上传在 onFinish 里用 FormData 以 multipart 提交到后端。
+  // 真正的上传在 onFinish 里用 FormData 以 multipart 提交（files[] 批量）。
   const customRequest: UploadProps['customRequest'] = (options) => {
-    const file = options.file as File
+    const file = options.file as File & { uid: string }
     const isAllowed = file.type === 'application/pdf' || file.type.startsWith('image/')
     if (!isAllowed) {
       message.error('仅支持图片或 PDF 文件')
@@ -78,39 +82,28 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
       options.onError?.(new Error('文件过大'))
       return
     }
-    // 校验通过：保存原始 File，标记成功让 antd 显示「已选」
-    setSelected({ name: file.name, type: file.type, file })
+    // 校验通过：追加原始 File，标记成功让 antd 显示「已选」
+    setSelected((prev) => [...prev, { uid: file.uid, name: file.name, type: file.type, file }])
     options.onSuccess?.({})
   }
 
   const onFinish = async (values: { ownerName: string; invoiceDate: dayjs.Dayjs; note?: string }) => {
-    console.log('[UploadModal] onFinish 触发', {
-      ownerName: values.ownerName,
-      invoiceDate: values.invoiceDate?.format('YYYY-MM-DD'),
-      hasSelected: !!selected,
-      fileType: selected?.type,
-      fileSize: selected?.file?.size,
-    })
     // 兜底校验：防止「没选文件却点了存档」时静默无反应
-    if (!selected) {
-      console.warn('[UploadModal] 未选择文件，终止提交')
-      message.error('请先选择发票文件')
+    if (selected.length === 0) {
+      message.error('请先至少选择一个发票文件')
       return
     }
     setSubmitting(true)
     try {
-      console.log('[UploadModal] 开始 POST /api/invoices (multipart) ...')
-      await addInvoice({
+      const saved = await addInvoices({
         ownerName: values.ownerName.trim(),
         invoiceDate: values.invoiceDate.format('YYYY-MM-DD'),
-        file: selected.file,
+        files: selected.map((s) => s.file),
         note: values.note?.trim(),
       })
-      console.log('[UploadModal] 上传成功，发票已写入后端')
-      message.success('发票已存档')
+      message.success(`已存档 ${saved.length} 张发票`)
       handleClose()
     } catch (e) {
-      console.error('[UploadModal] 上传异常：', e)
       const msg = e instanceof Error ? e.message : '未知错误'
       message.error(`上传失败：${msg}（请确认后端服务已启动：pnpm dev）`)
     } finally {
@@ -120,7 +113,7 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
 
   return (
     <Modal
-      title="上传发票"
+      title="上传发票（支持批量）"
       open={open}
       onCancel={handleClose}
       onOk={() => form.submit()}
@@ -142,7 +135,7 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
           name="ownerName"
           rules={[{ required: true, whitespace: true, message: '请填写发票归属人' }]}
         >
-          <Input placeholder="这张发票是谁的（必填）" />
+          <Input placeholder="这些发票是谁的（必填）" />
         </Form.Item>
 
         <Form.Item
@@ -156,21 +149,17 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
         <Form.Item
           label="发票文件"
           required
-          validateStatus={selected ? undefined : 'error'}
-          help={selected ? undefined : '请选择一张发票文件（图片或 PDF）'}
+          validateStatus={selected.length ? undefined : 'error'}
+          help={selected.length ? undefined : '请选择发票文件（可多选，图片或 PDF）'}
         >
           <Upload
             accept="image/*,application/pdf"
-            maxCount={1}
+            multiple
             fileList={fileList}
             customRequest={customRequest}
             onChange={handleChange}
-            onRemove={() => {
-              setSelected(null)
-              return true
-            }}
           >
-            <Button icon={<UploadOutlined />}>选择文件（图片或 PDF，≤{MAX_SIZE_MB}MB）</Button>
+            <Button icon={<UploadOutlined />}>选择文件（可多选，图片或 PDF，≤{MAX_SIZE_MB}MB）</Button>
           </Upload>
         </Form.Item>
 

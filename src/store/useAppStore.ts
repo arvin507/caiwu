@@ -47,13 +47,14 @@ interface AppState {
   setPreferences: (patch: Partial<AppPreferences>) => void
   addTransaction: (input: Omit<Transaction, 'id'>) => void
   loadInvoices: () => Promise<void>
-  addInvoice: (input: {
+  /** 批量上传发票：同一归属人/日期/备注下，可一次传多张文件 */
+  addInvoices: (input: {
     ownerName: string
     invoiceDate: string
-    /** 原始文件对象，用 multipart/form-data 上传 */
-    file: File
+    /** 原始文件对象数组（一次多选），用 multipart/form-data 的 files[] 上传 */
+    files: File[]
     note?: string
-  }) => Promise<void>
+  }) => Promise<Invoice[]>
   /** 人工核对写回：PATCH /api/invoices/:id 更新解析结果/状态，并合并回列表 */
   updateInvoice: (id: string, patch: {
     parsedData?: Record<string, unknown> | null
@@ -118,17 +119,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  // 上传一张发票到后端服务：POST /api/invoices（multipart/form-data）
-  addInvoice: async (input) => {
+  // 批量上传发票到后端服务：POST /api/invoices，同一表单里用 files[] 挂多张文件
+  addInvoices: async (input) => {
     const fd = new FormData()
     fd.append('ownerName', input.ownerName)
     fd.append('invoiceDate', input.invoiceDate)
     if (input.note) fd.append('note', input.note)
-    fd.append('file', input.file)
+    for (const f of input.files) fd.append('files', f)
     const res = await fetch('/api/invoices', { method: 'POST', body: fd })
     if (!res.ok) throw new Error('上传失败')
-    const saved = (await res.json()) as Invoice
-    set((state) => ({ invoices: [saved, ...state.invoices] }))
+    const saved = (await res.json()) as Invoice[]
+    set((state) => ({ invoices: [...saved, ...state.invoices] }))
+    return saved
   },
 
   // 人工核对写回：PATCH /api/invoices/:id，成功后把最新数据合并回列表
