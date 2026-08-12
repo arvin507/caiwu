@@ -16,8 +16,7 @@ dist-ssr
 server/data/
 server/uploads/
 
-# 本地 AI 工作区（开发记忆/笔记，不入库）
-.workbuddy/
+
 
 # Editor directories and files
 .vscode/*
