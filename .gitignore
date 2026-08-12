@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# mock 服务运行时生成的数据与上传文件
+server/data/
+server/uploads/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

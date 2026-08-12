@@ -32,3 +32,6 @@ export const mockTransactions: Transaction[] = [
   { id: 't-5', date: '2026-08-10', type: 'income', categoryId: 'c-bonus', accountId: 'a-bank', amount: 2000, note: '项目奖金' },
   { id: 't-6', date: '2026-08-11', type: 'expense', categoryId: 'c-fun', accountId: 'a-credit', amount: 128, note: '电影票' },
 ]
+
+// 注：发票数据不再用 mock，改由 mock 后端服务( server/index.js )提供，
+// 发票页挂载时通过 store.loadInvoices() 从 /api/invoices 拉取。
