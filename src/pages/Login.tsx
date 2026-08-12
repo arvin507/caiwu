@@ -1,23 +1,29 @@
 import { useState } from 'react'
-import { Button, Card, Form, Input, Typography } from 'antd'
+import { Button, Card, Form, Input, Typography, App as AntApp } from 'antd'
 import { useAppStore } from '@/store/useAppStore'
 
 /**
  * 登录页
  *
- * 演示模式：任意非空的用户名 / 密码即可登录（调用 store.login）。
- * 真实项目里，这里应把用户名密码发给后端，校验通过后再 login，
- * 并且通常会把后端返回的 token 存到 localStorage 做「刷新后保持登录」。
+ * 现在对接真实后端：把用户名/密码发给 /api/auth/login，
+ * 校验通过后由 store.login 保存 JWT token 与用户信息（含角色），
+ * 并把 token 存入 localStorage，刷新页面后仍能保持登录。
  */
 export default function Login() {
   const login = useAppStore((s) => s.login)
+  const { message } = AntApp.useApp()
   const [loading, setLoading] = useState(false)
 
-  const onFinish = (values: { username: string; password: string }) => {
+  const onFinish = async (values: { username: string; password: string }) => {
     setLoading(true)
-    // 调用 store 的 login，把用户名记为当前用户
-    login(values.username)
-    // 登录成功后，App.tsx 的路由守卫会自动切到系统主页（无需手动跳转）
+    try {
+      await login(values.username, values.password)
+      // 登录成功：App 的路由守卫会自动切到系统主页，无需手动跳转
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '登录失败')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -69,7 +75,7 @@ export default function Login() {
           type="secondary"
           style={{ textAlign: 'center', fontSize: 12, marginBottom: 0 }}
         >
-          演示系统：任意用户名 / 密码即可登录
+          默认管理员：admin / 123456（登录后请尽快修改密码）
         </Typography.Paragraph>
       </Card>
     </div>

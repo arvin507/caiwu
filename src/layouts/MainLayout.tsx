@@ -7,6 +7,7 @@ import {
   LogoutOutlined,
   SettingOutlined,
   SwapOutlined,
+  TeamOutlined,
   WalletOutlined,
 } from '@ant-design/icons'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
@@ -38,6 +39,10 @@ export default function MainLayout() {
     { key: '/invoices', icon: <FileTextOutlined />, label: '发票管理' },
     { key: '/reports', icon: <BarChartOutlined />, label: '统计报表' },
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+    // 仅超级管理员可见：用户管理（普通用户不显示此项，且后端也会拒绝访问）
+    ...(currentUser?.role === 'admin'
+      ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }]
+      : []),
   ]
 
   return (
@@ -80,14 +85,17 @@ export default function MainLayout() {
             财务管理系统
           </Typography.Title>
 
-          {/* 右侧：当前登录用户 + 退出 */}
+          {/* 右侧：当前登录用户 + 修改密码 / 退出 */}
           <Dropdown
             menu={{
               items: [
+                { key: 'change-password', icon: <SettingOutlined />, label: '修改密码' },
+                { type: 'divider' },
                 { key: 'logout', icon: <LogoutOutlined />, label: '退出登录' },
               ],
               onClick: ({ key }) => {
                 if (key === 'logout') logout()
+                else if (key === 'change-password') navigate('/change-password')
               },
             }}
           >

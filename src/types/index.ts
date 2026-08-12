@@ -46,10 +46,17 @@ export interface Transaction {
   note?: string
 }
 
+/** 用户角色：超级管理员 / 普通用户 */
+export type UserRole = 'admin' | 'user'
+
 /** 当前登录用户 */
 export interface User {
   id: string
   name: string
+  /** 登录账号（后端返回，可选） */
+  username?: string
+  /** 角色，决定能看到的菜单与可执行的操作 */
+  role: UserRole
   /** 头像链接，可选；不传则展示首字母 */
   avatar?: string
 }

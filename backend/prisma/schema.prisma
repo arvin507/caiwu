@@ -24,3 +24,16 @@ model Invoice {
 
   @@map("invoices")
 }
+
+/// 系统用户表：支持「超级管理员(admin) / 普通用户(user)」两级角色
+/// 密码一律存 bcrypt 哈希，绝不保存明文
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique // 登录账号，唯一
+  name         String // 展示用姓名
+  passwordHash String // bcrypt 哈希后的密码
+  role         String   @default("user") // 'admin' | 'user'
+  createdAt    DateTime @default(now())
+
+  @@map("users")
+}

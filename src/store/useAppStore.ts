@@ -17,10 +17,13 @@ import {
 /**
  * 全局状态仓库（Zustand）
  *
- * Zustand 的核心思路：把「跨组件共享的数据」集中到一个 store，
- * 任意组件用 `useAppStore(s => s.xxx)` 订阅自己关心的片段，
- * 只有用到的片段变化时才重渲染 —— 比 Context 更细粒度、性能更好。
+ * 登录态现在对接真实后端：
+ * - login：把用户名/密码发给 /api/auth/login，拿到 JWT token 存到 localStorage
+ * - 刷新页面后，restoreSession 用本地 token 调 /api/auth/me 恢复登录态（含 role）
+ * - 所有需要鉴权的请求都带 `Authorization: Bearer <token>`
  */
+
+const TOKEN_KEY = 'caiwu_token'
 
 interface AppState {
   // ---- 数据 ----
@@ -35,6 +38,10 @@ interface AppState {
   // ---- 登录态 ----
   currentUser: User | null
   isAuthenticated: boolean
+  /** JWT token（来自后端，存 localStorage 以便刷新后保持登录） */
+  token: string | null
+  /** 初始「用 token 恢复登录态」是否已完成，避免刷新瞬间闪一下登录页 */
+  authReady: boolean
 
   // ---- 操作（actions） ----
   setPreferences: (patch: Partial<AppPreferences>) => void
@@ -47,11 +54,22 @@ interface AppState {
     file: File
     note?: string
   }) => Promise<void>
-  login: (username: string) => void
+
+  // 鉴权相关
+  login: (username: string, password: string) => Promise<void>
   logout: () => void
+  restoreSession: () => Promise<void>
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>
+
+  // 用户管理（仅超级管理员）
+  fetchUsers: () => Promise<User[]>
+  addUser: (input: { username: string; name: string; password: string }) => Promise<void>
 }
 
-export const useAppStore = create<AppState>((set) => ({
+const initialToken =
+  typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null
+
+export const useAppStore = create<AppState>((set, get) => ({
   accounts: mockAccounts,
   transactions: mockTransactions,
   categories: mockCategories,
@@ -59,9 +77,11 @@ export const useAppStore = create<AppState>((set) => ({
 
   invoices: [],
 
-  // 初始未登录
+  // 初始：若本地已有 token，先当作已登录（restoreSession 会再次校验）
   currentUser: null,
-  isAuthenticated: false,
+  isAuthenticated: !!initialToken,
+  token: initialToken,
+  authReady: false,
 
   setPreferences: (patch) =>
     set((state) => ({ preferences: { ...state.preferences, ...patch } })),
@@ -90,8 +110,7 @@ export const useAppStore = create<AppState>((set) => ({
     }
   },
 
-  // 上传一张发票到后端服务：POST /api/invoices（multipart/form-data，文件以二进制流上传）
-  // 后端接收后落盘 + 写 MySQL，返回带 storagePath 的记录
+  // 上传一张发票到后端服务：POST /api/invoices（multipart/form-data）
   addInvoice: async (input) => {
     const fd = new FormData()
     fd.append('ownerName', input.ownerName)
@@ -104,14 +123,94 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({ invoices: [saved, ...state.invoices] }))
   },
 
-  // 演示登录：记录用户名即可（真实项目应校验后端返回的 token）
-  login: (username) =>
-    set({
-      currentUser: { id: 'u-demo', name: username },
-      isAuthenticated: true,
-    }),
+  // 登录：调后端校验，成功存 token + 用户信息（含 role）
+  login: async (username, password) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(err.error || '登录失败')
+    }
+    const data = (await res.json()) as { token: string; user: User }
+    localStorage.setItem(TOKEN_KEY, data.token)
+    set({ token: data.token, currentUser: data.user, isAuthenticated: true })
+  },
 
-  logout: () => set({ currentUser: null, isAuthenticated: false }),
+  logout: () => {
+    localStorage.removeItem(TOKEN_KEY)
+    set({ token: null, currentUser: null, isAuthenticated: false })
+  },
+
+  // 刷新页面后：用本地 token 调 /api/auth/me 恢复登录态（含最新 role）
+  restoreSession: async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_KEY) : null
+    if (!token) {
+      set({ authReady: true })
+      return
+    }
+    try {
+      const res = await fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('token 失效')
+      const user = (await res.json()) as User
+      set({ token, currentUser: user, isAuthenticated: true })
+    } catch {
+      // token 失效：清空，退回登录页
+      localStorage.removeItem(TOKEN_KEY)
+      set({ token: null, currentUser: null, isAuthenticated: false })
+    } finally {
+      set({ authReady: true })
+    }
+  },
+
+  // 修改密码：调后端，校验旧密码后更新（任意已登录用户可用）
+  changePassword: async (oldPassword, newPassword) => {
+    const { token } = get()
+    if (!token) throw new Error('未登录')
+    const res = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ oldPassword, newPassword }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(err.error || '修改失败')
+    }
+  },
+
+  // 获取用户列表（仅管理员后端会放行）
+  fetchUsers: async () => {
+    const { token } = get()
+    const res = await fetch('/api/users', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) throw new Error('获取用户列表失败')
+    return (await res.json()) as User[]
+  },
+
+  // 创建普通用户（仅管理员后端会放行）
+  addUser: async (input) => {
+    const { token } = get()
+    const res = await fetch('/api/users', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string }
+      throw new Error(err.error || '创建失败')
+    }
+  },
 }))
 
 /**
