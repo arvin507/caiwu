@@ -1,0 +1,26 @@
+// Prisma 数据模型定义
+// 文档：https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// 发票表：对应前端发票管理功能
+/// 文件本身落盘到 backend/uploads/，数据库只存元数据与文件路径
+model Invoice {
+  id          String   @id @default(cuid())
+  ownerName   String // 归属人（必填）
+  fileName    String // 原始文件名
+  fileType    String // MIME 类型，如 image/png、application/pdf
+  invoiceDate DateTime // 发票日期（用户填写）
+  uploadedAt  DateTime @default(now()) // 上传时间（系统记录）
+  note        String? // 备注（可选）
+  storagePath String // 落盘后的相对路径，如 /uploads/inv-xxx.pdf
+
+  @@map("invoices")
+}
