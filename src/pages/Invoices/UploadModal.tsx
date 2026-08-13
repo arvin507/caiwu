@@ -28,7 +28,7 @@ const MAX_SIZE_MB = 10
  *  - 归属人（ownerName）必填 —— 否则「按人聚合」无意义
  *  - 文件限制 image/* + pdf，且 ≤ 10MB
  *  - 支持一次多选多张发票，用一个请求批量上传（后端 files[] 循环处理）
- *  - 重复上传：本版不做去重（已知限制，见 store.addInvoices 注释）
+ *  - 重复上传：后端在落库前按发票号码去重——号码已存在的发票会被自动删除并提示
  *
  * 上传逻辑用 customRequest 完全接管（而非 beforeUpload 返回 false）：
  * antd v6 中 beforeUpload 返回 false 时文件可能不进入受控 fileList，
@@ -95,13 +95,22 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
     }
     setSubmitting(true)
     try {
-      const saved = await addInvoices({
+      const { created, skipped } = await addInvoices({
         ownerName: values.ownerName.trim(),
         invoiceDate: values.invoiceDate.format('YYYY-MM-DD'),
         files: selected.map((s) => s.file),
         note: values.note?.trim(),
       })
-      message.success(`已存档 ${saved.length} 张发票`)
+      if (created.length) message.success(`已存档 ${created.length} 张发票`)
+      if (skipped.length) {
+        const names = skipped
+          .map((s) => `${s.fileName}（号码 ${s.invoiceNumber}）`)
+          .join('、')
+        message.warning(`已跳过 ${skipped.length} 张重复发票（号码已存在）：${names}`)
+      }
+      if (!created.length && !skipped.length) {
+        message.error('没有文件被处理')
+      }
       handleClose()
     } catch (e) {
       const msg = e instanceof Error ? e.message : '未知错误'

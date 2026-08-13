@@ -47,14 +47,18 @@ interface AppState {
   setPreferences: (patch: Partial<AppPreferences>) => void
   addTransaction: (input: Omit<Transaction, 'id'>) => void
   loadInvoices: () => Promise<void>
-  /** 批量上传发票：同一归属人/日期/备注下，可一次传多张文件 */
+  /** 批量上传发票：同一归属人/日期/备注下，可一次传多张文件。
+   *  返回 created（成功落库）与 skipped（因发票号码重复被自动跳过）。 */
   addInvoices: (input: {
     ownerName: string
     invoiceDate: string
     /** 原始文件对象数组（一次多选），用 multipart/form-data 的 files[] 上传 */
     files: File[]
     note?: string
-  }) => Promise<Invoice[]>
+  }) => Promise<{
+    created: Invoice[]
+    skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string }>
+  }>
   /** 人工核对写回：PATCH /api/invoices/:id 更新解析结果/状态，并合并回列表 */
   updateInvoice: (id: string, patch: {
     parsedData?: Record<string, unknown> | null
@@ -119,7 +123,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  // 批量上传发票到后端服务：POST /api/invoices，同一表单里用 files[] 挂多张文件
+  // 批量上传发票到后端服务：POST /api/invoices，同一表单里用 files[] 挂多张文件。
+  // 后端会在落库前按发票号码去重：重复的不落库（文件也删除），返回 skipped 供前端提示。
   addInvoices: async (input) => {
     const fd = new FormData()
     fd.append('ownerName', input.ownerName)
@@ -128,9 +133,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     for (const f of input.files) fd.append('files', f)
     const res = await fetch('/api/invoices', { method: 'POST', body: fd })
     if (!res.ok) throw new Error('上传失败')
-    const saved = (await res.json()) as Invoice[]
-    set((state) => ({ invoices: [...saved, ...state.invoices] }))
-    return saved
+    const data = (await res.json()) as {
+      created: Invoice[]
+      skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string }>
+    }
+    set((state) => ({ invoices: [...data.created, ...state.invoices] }))
+    return data
   },
 
   // 人工核对写回：PATCH /api/invoices/:id，成功后把最新数据合并回列表

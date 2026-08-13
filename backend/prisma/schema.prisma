@@ -24,7 +24,9 @@ model Invoice {
   parseStatus String   @default("pending") // 解析状态：pending | done | failed
   parsedData  Json?                     // 本地解析（PDF/OFD）出的结构化字段
   parseError  String?                   // 解析失败时的错误信息
+  invoiceNumber String?                 // 解析出的发票号码（独立列，用于去重/查询，避免 JSON path 在 MySQL 下报错）
 
+  @@index([invoiceNumber])
   @@map("invoices")
 }
 

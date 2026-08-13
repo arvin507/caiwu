@@ -97,6 +97,8 @@ export interface Invoice {
   parsedData?: InvoiceParsedData | null
   /** 解析失败原因 */
   parseError?: string | null
+  /** 解析出的发票号码（独立列；用于前端展示与去重提示，避免依赖 JSON 字段） */
+  invoiceNumber?: string | null
 }
 
 /** 发票本地解析得到的字段（键可为空，表示没抽出来） */
