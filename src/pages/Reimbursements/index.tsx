@@ -138,11 +138,19 @@ export default function Reimbursements() {
   const [linkLine, setLinkLine] = useState<{
     type: 'item' | 'leg'
     id: string
+    /** 当前行所属报销单 id：必须取「展开行对应的报销单」，不能用 active，否则会串到上次查看的报销单 */
+    rebId: string
+    applicantName: string
     invoiceId?: string | null
   } | null>(null)
 
-  const openLink = (type: 'item' | 'leg', id: string) => {
-    setLinkLine({ type, id })
+  const openLink = (
+    type: 'item' | 'leg',
+    id: string,
+    rebId: string,
+    applicantName: string,
+  ) => {
+    setLinkLine({ type, id, rebId, applicantName })
     setLinkOpen(true)
   }
 
@@ -277,8 +285,10 @@ export default function Reimbursements() {
   const renderInvoiceCell = (
     line: { id: string; links?: { id: string; invoiceId: string; invoice?: { invoiceNumber?: string | null; fileName?: string | null } | null; allocatedAmount?: string | null }[] },
     type: 'item' | 'leg',
+    rebId: string,
+    applicantName: string,
   ) => (
-    <Space direction="vertical" size={2} style={{ width: '100%' }} align="start">
+    <Space wrap size={[4, 4]} style={{ width: '100%' }} align="start">
       {(line.links ?? []).map((l) => (
         <Space size="small" key={l.id} wrap>
           <Tag color="success">
@@ -290,7 +300,7 @@ export default function Reimbursements() {
           </Button>
         </Space>
       ))}
-      <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
+      <Button type="link" size="small" onClick={() => openLink(type, line.id, rebId, applicantName)}>
         关联
       </Button>
     </Space>
@@ -319,7 +329,7 @@ export default function Reimbursements() {
                   {
                     title: '发票',
                     key: 'invoice',
-                    render: (_, r) => renderInvoiceCell(r, 'leg'),
+                    render: (_, r) => renderInvoiceCell(r, 'leg', row.id, row.applicantName),
                   },
                 ]}
               />
@@ -339,7 +349,7 @@ export default function Reimbursements() {
                   {
                     title: '发票',
                     key: 'invoice',
-                    render: (_, r) => renderInvoiceCell(r, 'item'),
+                    render: (_, r) => renderInvoiceCell(r, 'item', row.id, row.applicantName),
                   },
                 ]}
               />
@@ -362,7 +372,7 @@ export default function Reimbursements() {
           {
             title: '发票',
             key: 'invoice',
-            render: (_, r) => renderInvoiceCell(r, 'item'),
+            render: (_, r) => renderInvoiceCell(r, 'item', row.id, row.applicantName),
           },
         ]}
       />
@@ -525,7 +535,8 @@ export default function Reimbursements() {
 
       <LinkInvoiceModal
         open={linkOpen}
-        reimbursementId={active?.id ?? ''}
+        reimbursementId={linkLine?.rebId ?? ''}
+        applicantName={linkLine?.applicantName ?? ''}
         lineType={linkLine?.type ?? 'item'}
         lineId={linkLine?.id ?? ''}
         onClose={() => setLinkOpen(false)}

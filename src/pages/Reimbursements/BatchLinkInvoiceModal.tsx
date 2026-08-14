@@ -45,7 +45,7 @@ interface AutoResult {
     invoiceId: string
     invoiceNumber: string | null
     amount: number | null
-    reason: 'parseFailed' | 'noMatch' | 'ambiguous' | 'occupied'
+    reason: 'parseFailed' | 'noMatch' | 'ambiguous' | 'occupied' | 'ownerMismatch'
   }>
   /** auto-link 完成后返回的最新整单，用于刷新父级（已匹配的「已关联」状态） */
   reimbursement?: Reimbursement
@@ -74,6 +74,7 @@ const REASON_LABEL: Record<AutoResult['unmatched'][number]['reason'], string> = 
   noMatch: '没有金额相等的明细行',
   ambiguous: '该金额对应多行明细，需人工选择',
   occupied: '该发票已关联到其他报销明细',
+  ownerMismatch: '发票归属人与报销单申请人不一致，无法关联',
 }
 
 const MAX_SIZE_MB = 10

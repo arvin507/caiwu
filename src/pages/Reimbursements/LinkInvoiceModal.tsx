@@ -15,6 +15,8 @@ interface Props {
   open: boolean
   /** 所属报销单 id（用于拼接口路径 /api/reimbursements/:id/link） */
   reimbursementId: string
+  /** 当前报销单申请人，用于按归属人过滤可关联发票 */
+  applicantName?: string
   /** 当前要关联的是「费用项」还是「行程段」 */
   lineType: 'item' | 'leg'
   /** 当前行的 id */
@@ -37,6 +39,7 @@ function isLinkedToCurrent(inv: LinkableInvoice, lineId: string): boolean {
 export default function LinkInvoiceModal({
   open,
   reimbursementId,
+  applicantName,
   lineType,
   lineId,
   onClose,
@@ -58,7 +61,7 @@ export default function LinkInvoiceModal({
     ;(async () => {
       setLoading(true)
       try {
-        const res = await fetch('/api/invoices/linkable', {
+        const res = await fetch(`/api/invoices/linkable?reimbursementId=${reimbursementId}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         })
         if (!res.ok) throw new Error('加载发票列表失败')
@@ -214,6 +217,7 @@ export default function LinkInvoiceModal({
       destroyOnClose
     >
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        仅显示归属人为「{applicantName || '—'}」的发票（申请人与发票归属须一致）。
         勾选一张或多张发票关联到当前行（1:N）。已关联其它行的发票（N:1）也可继续关联到此行，
         分摊金额请在「批量关联发票」弹窗里填写。
       </Typography.Paragraph>

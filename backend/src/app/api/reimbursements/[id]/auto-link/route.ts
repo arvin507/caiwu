@@ -39,7 +39,7 @@ export async function POST(
   const { id } = await params
   const reb = await prisma.reimbursement.findUnique({
     where: { id },
-    select: { id: true, submitterId: true },
+    select: { id: true, submitterId: true, applicantName: true },
   })
   if (!reb) return NextResponse.json({ error: '报销单不存在' }, { status: 404 })
   if (user.role !== 'admin' && reb.submitterId !== user.id) {
@@ -77,7 +77,7 @@ export async function POST(
   // 本次上传的这批发票（仅取必要字段）
   const invoices = await prisma.invoice.findMany({
     where: { id: { in: body.invoiceIds } },
-    select: { id: true, invoiceNumber: true, parseStatus: true, parsedData: true },
+    select: { id: true, invoiceNumber: true, ownerName: true, parseStatus: true, parsedData: true },
   })
 
   const linked: Array<{
@@ -91,7 +91,7 @@ export async function POST(
     invoiceId: string
     invoiceNumber: string | null
     amount: number | null
-    reason: 'parseFailed' | 'noMatch' | 'ambiguous'
+    reason: 'parseFailed' | 'noMatch' | 'ambiguous' | 'ownerMismatch'
   }> = []
   // 已自动关联的行，避免被同批次另一张发票重复占用
   const usedLineIds = new Set<string>()
@@ -99,6 +99,17 @@ export async function POST(
   for (const inv of invoices) {
     const raw = inv.parsedData && (inv.parsedData as Record<string, unknown>).totalAmount
     const amt = raw != null && !isNaN(Number(raw)) ? round2(Number(raw)) : null
+
+    // 业务硬规则：发票归属人须等于报销单申请人，否则不参与自动匹配
+    if ((inv.ownerName || '').trim() !== (reb.applicantName || '').trim()) {
+      unmatched.push({
+        invoiceId: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        amount: amt,
+        reason: 'ownerMismatch',
+      })
+      continue
+    }
 
     // 解析失败 / 无金额 → 无法自动匹配
     if (inv.parseStatus !== 'done' || amt === null) {

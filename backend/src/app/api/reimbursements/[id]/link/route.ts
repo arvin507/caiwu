@@ -33,7 +33,7 @@ export async function PATCH(
   const { id } = await params
   const reb = await prisma.reimbursement.findUnique({
     where: { id },
-    select: { id: true, submitterId: true },
+    select: { id: true, submitterId: true, applicantName: true },
   })
   if (!reb) return NextResponse.json({ error: '报销单不存在' }, { status: 404 })
   if (user.role !== 'admin' && reb.submitterId !== user.id) {
@@ -75,14 +75,31 @@ export async function PATCH(
     }
   }
 
-  // 逐条建立关联
+  // 业务硬规则：发票归属人须等于报销单申请人，否则不允许关联。
+  // 先整体校验、再整体写入（原子，避免部分写入）。
+  const applicantName = (reb.applicantName || '').trim()
   for (const link of links) {
     if (!link?.invoiceId) continue
     const inv = await prisma.invoice.findUnique({
       where: { id: link.invoiceId },
-      select: { id: true },
+      select: { id: true, ownerName: true },
     })
     if (!inv) return NextResponse.json({ error: `发票不存在: ${link.invoiceId}` }, { status: 404 })
+    if ((inv.ownerName || '').trim() !== applicantName) {
+      return NextResponse.json(
+        {
+          error: `发票归属「${inv.ownerName || '—'}」与报销单申请人「${
+            reb.applicantName || '—'
+          }」不一致，无法关联`,
+        },
+        { status: 400 },
+      )
+    }
+  }
+
+  // 逐条建立关联
+  for (const link of links) {
+    if (!link?.invoiceId) continue
     await upsertLink(prisma, {
       lineType: lineType as LineType,
       lineId,

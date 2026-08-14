@@ -33,5 +33,21 @@
     "oxlint": "^1.75.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
-  }
+  },
+  "description": "> 一个用 **React + TypeScript + Vite** 写的前端，配合 **Next.js + Prisma** 后端与 **MySQL** 数据库的实战教学项目。\r > 当前已实现：登录、发票管理（上传 / 列表 / 排序 / 预览 / 删除）等，其余页面为占位。",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arvin507/caiwu.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/arvin507/caiwu/issues"
+  },
+  "homepage": "https://github.com/arvin507/caiwu#readme"
 }

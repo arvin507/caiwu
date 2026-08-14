@@ -142,7 +142,7 @@ export default function ReimbursementDetailDrawer({
     line: { id: string; links?: InvoiceLink[] },
     type: 'item' | 'leg',
   ) => (
-    <Space direction="vertical" size={2} style={{ width: '100%' }} align="start">
+    <Space wrap size={[4, 4]} style={{ width: '100%' }} align="start">
       {(line.links ?? []).map((l) => (
         <Space size="small" key={l.id} wrap>
           <Tag color="success">
@@ -511,6 +511,7 @@ export default function ReimbursementDetailDrawer({
       <LinkInvoiceModal
         open={linkOpen}
         reimbursementId={reb?.id ?? ''}
+        applicantName={reb?.applicantName ?? ''}
         lineType={linkLine?.type ?? 'item'}
         lineId={linkLine?.id ?? ''}
         onClose={() => setLinkOpen(false)}
