@@ -15,9 +15,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const reb = await prisma.reimbursement.findUnique({
     where: { id },
     include: {
-      items: { include: { invoice: true } },
+      items: { include: { links: { include: { invoice: true } } } },
       trip: true,
-      legs: { include: { invoice: true } },
+      legs: { include: { links: { include: { invoice: true } } } },
     },
   })
   if (!reb) return NextResponse.json({ error: '报销单不存在' }, { status: 404 })

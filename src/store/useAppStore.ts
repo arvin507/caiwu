@@ -48,7 +48,7 @@ interface AppState {
   addTransaction: (input: Omit<Transaction, 'id'>) => void
   loadInvoices: () => Promise<void>
   /** 批量上传发票：同一归属人/日期/备注下，可一次传多张文件。
-   *  返回 created（成功落库）与 skipped（因发票号码重复被自动跳过）。 */
+   *  返回 created（新建）、updated（同一文件/发票号已存在，幂等更新）、skipped（已关联报销单被跳过）。 */
   addInvoices: (input: {
     ownerName: string
     invoiceDate: string
@@ -57,7 +57,8 @@ interface AppState {
     note?: string
   }) => Promise<{
     created: Invoice[]
-    skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string }>
+    updated: Invoice[]
+    skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string; reason: string }>
   }>
   /** 人工核对写回：PATCH /api/invoices/:id 更新解析结果/状态，并合并回列表 */
   updateInvoice: (id: string, patch: {
@@ -140,9 +141,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!res.ok) throw new Error('上传失败')
     const data = (await res.json()) as {
       created: Invoice[]
-      skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string }>
+      updated: Invoice[]
+      skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string; reason: string }>
     }
-    set((state) => ({ invoices: [...data.created, ...state.invoices] }))
+    // 合并：新建的置顶，已更新的按 id 原地替换——避免同一发票出现两条
+    set((state) => {
+      const map = new Map(state.invoices.map((i) => [i.id, i]))
+      for (const inv of [...data.updated, ...data.created]) map.set(inv.id, inv)
+      return { invoices: Array.from(map.values()) }
+    })
     return data
   },
 

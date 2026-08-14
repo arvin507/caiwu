@@ -25,10 +25,10 @@ model Invoice {
   parsedData  Json?                     // 本地解析（PDF/OFD）出的结构化字段
   parseError  String?                   // 解析失败时的错误信息
   invoiceNumber String?                 // 解析出的发票号码（独立列，用于去重/查询，避免 JSON path 在 MySQL 下报错）
+  fileHash     String?                 // 文件内容 sha256，用于幂等去重（同一文件重复上传只更新不新建）
 
-  // 反向关系：一张发票可被关联到「一条报销明细」或「一段差旅行程」（1:1，invoiceId 唯一约束保证）
-  reimbursementItems ReimbursementItem[]
-  reimbursementLegs  ReimbursementTripLeg[]
+  // 反向关系：一张发票可通过关联表挂到多条报销明细/行程段（支持 1:N 与 N:1）
+  links InvoiceLink[]
 
   @@index([invoiceNumber])
   @@map("invoices")
@@ -89,8 +89,7 @@ model ReimbursementItem {
   summary         String? // 摘要
   amount          Decimal @db.Decimal(10, 2)
   note            String?
-  invoiceId       String? @unique // 关联的发票（1:1，唯一保证一张发票只挂一行）
-  invoice         Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  links           InvoiceLink[] // 关联的发票（通过发票关联表，支持 1:N）
   reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
 
   @@map("reimbursement_items")
@@ -124,9 +123,31 @@ model ReimbursementTripLeg {
   toStation       String?
   amount          Decimal @db.Decimal(10, 2) // 金额小计（单值）
   ticketCount     Int? // 单据张数
-  invoiceId       String? @unique // 关联的发票（1:1，唯一保证一张发票只挂一行）
-  invoice         Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  links           InvoiceLink[] // 关联的发票（通过发票关联表，支持 1:N）
   reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
 
   @@map("reimbursement_trip_legs")
+}
+
+/// 发票关联表（junction）：支持 1:1 / 1:N / N:1 三种关联模式
+///  - 1:1 ：一行 ↔ 一张发票（一条记录）
+///  - 1:N ：一行 ↔ 多张发票（多条记录，reimbursementItemId 相同、invoiceId 不同）
+///  - N:1 ：一张发票 ↔ 多行（多条记录，invoiceId 相同、reimbursementItemId/LegId 不同），allocatedAmount 记录分摊额
+model InvoiceLink {
+  id                  String   @id @default(cuid())
+  invoiceId           String
+  invoice             Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  reimbursementItemId String?
+  reimbursementItem   ReimbursementItem? @relation(fields: [reimbursementItemId], references: [id], onDelete: Cascade)
+  reimbursementLegId  String?
+  reimbursementLeg    ReimbursementTripLeg? @relation(fields: [reimbursementLegId], references: [id], onDelete: Cascade)
+  allocatedAmount     Decimal? @db.Decimal(10, 2) // N:1 分摊：本发票分摊到该行的金额；1:1/1:N 可为空
+  note                String?
+  createdAt           DateTime @default(now())
+
+  // 同一行不会重复挂同一张发票（item 与 leg 各自独立唯一）
+  @@unique([reimbursementItemId, invoiceId])
+  @@unique([reimbursementLegId, invoiceId])
+  @@index([invoiceId])
+  @@map("invoice_links")
 }

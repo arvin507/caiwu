@@ -1,7 +1,8 @@
 // 百度 OCR：增值税发票识别（云端）
 //
-// 适用场景：图片类发票（png/jpg/jpeg/bmp/gif/webp）——本地无法从图片抽文字，
-// 需把图片发送到百度云端识别。PDF/OFD 仍走本地解析（见 invoiceParser.ts）。
+// 适用场景：所有发票（图片 / PDF / OFD）统一走云端结构化识别。
+// 百度 vat_invoice 接口原生支持 image / pdf_file / ofd_file 三种 base64 入参
+// （优先级 image > url > pdf_file > ofd_file），多页文件默认只识别第 1 页。
 //
 // 费用与合规提示：
 //  - 百度 OCR 有免费额度，超出按调用量计费，需在控制台开通「文字识别 OCR」服务。
@@ -11,6 +12,40 @@ import type { ParsedInvoice } from './invoiceParser'
 
 const TOKEN_URL = 'https://aip.baidubce.com/oauth/2.0/token'
 const VAT_URL = 'https://aip.baidubce.com/rest/2.0/ocr/v1/vat_invoice'
+
+// ─────────────────────────────────────────────────────────────
+// 并发控制：百度 OCR 的 QPS 上限为 2。
+// 用全局信号量保证「同时在途」的 OCR 请求不超过 2，避免触发 QPS 限流；
+// 即使前端并发上传、或多用户同时上传，OCR 调用也被统一节流到 2。
+// ─────────────────────────────────────────────────────────────
+const OCR_MAX_CONCURRENCY = 2
+let _active = 0
+const _waiters: Array<() => void> = []
+function acquireSlot(): Promise<void> {
+  if (_active < OCR_MAX_CONCURRENCY) {
+    _active++
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => _waiters.push(resolve))
+}
+function releaseSlot() {
+  _active--
+  const next = _waiters.shift()
+  if (next) {
+    _active++
+    next()
+  }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// 百度 QPS 超限错误码为 18；另含「请求过于频繁 / 限流」及瞬时网络抖动，这些都应重试。
+function isRetryableOcrError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e ?? '')
+  return /\b18\b|qps|rate.?limit|请求过于频繁|频繁|ECONNRESET|ETIMEDOUT|timeout|fetch failed|network/i.test(
+    msg,
+  )
+}
 
 // access_token 有效期约 30 天，这里在进程内缓存，过期前复用，减少获取调用
 let cachedToken: { token: string; expireAt: number } | null = null
@@ -59,42 +94,72 @@ function pick(wr: Record<string, unknown>, ...keys: string[]): string | null {
   return null
 }
 
-/** 调用百度「增值税发票识别」接口，把结果映射为 ParsedInvoice */
-export async function baiduVatOcr(base64: string): Promise<ParsedInvoice> {
-  // 百度限制图片 base64 后不超过约 4MB（原图约 3MB），过大直接提示压缩，避免无谓请求
-  if (base64.length > 4 * 1024 * 1024) {
-    throw new Error('图片过大（base64 > 4MB），请压缩后重试（建议原图 < 3MB）')
+/**
+ * 调用百度「增值税发票识别」接口，把结果映射为 ParsedInvoice。
+ * @param base64 文件纯 base64 串（不带 data URI 前缀）
+ * @param kind   文件类型：image / pdf / ofd，决定提交参数（image / pdf_file / ofd_file）
+ */
+export async function baiduVatOcr(base64: string, kind: 'image' | 'pdf' | 'ofd'): Promise<ParsedInvoice> {
+  // 百度限制 base64（编码+urlencode 后）不超过约 8MB，过大直接提示压缩，避免无谓请求
+  if (base64.length > 8 * 1024 * 1024) {
+    throw new Error('文件过大（base64 > 8MB），请压缩 / 缩小后重试')
   }
 
-  const token = await getBaiduToken()
-  const res = await fetch(`${VAT_URL}?access_token=${token}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    // image 为纯 base64 串（不带 data URI 前缀），按 urlencode 提交
-    body: `image=${encodeURIComponent(base64)}`,
-  })
-  const json = (await res.json()) as {
-    error_code?: number
-    error_msg?: string
-    words_result?: Record<string, unknown>
-  }
-  if (json.error_code) {
-    throw new Error(`百度 OCR 错误 ${json.error_code}: ${json.error_msg}`)
-  }
+  const paramName = kind === 'image' ? 'image' : kind === 'pdf' ? 'pdf_file' : 'ofd_file'
 
-  const wr = json.words_result || {}
-  return {
-    // vat_invoice 字段映射（与本地解析抽出的字段对齐）
-    invoiceCode: pick(wr, 'InvoiceCode'), // 发票代码
-    invoiceNumber: pick(wr, 'InvoiceNum'), // 发票号码
-    invoiceDate: pick(wr, 'InvoiceDate'), // 开票日期
-    sellerName: pick(wr, 'SellerName'), // 销售方名称
-    sellerTaxId: pick(wr, 'SellerRegisterNum'), // 销售方纳税人识别号
-    buyerName: pick(wr, 'PurchaserName'), // 购买方名称
-    amount: pick(wr, 'TotalAmount'), // 合计金额（不含税）
-    taxAmount: pick(wr, 'TotalTax'), // 合计税额
-    totalAmount: pick(wr, 'AmountInFiguers'), // 价税合计（小写）
-    // 把百度返回的全部结构化字段存为原文，前端「核对」页可查看/人工校对
-    rawText: JSON.stringify(wr, null, 2),
+  // 并发闸门：保证同时在途 OCR 请求 ≤ OCR_MAX_CONCURRENCY（=2，对齐百度 QPS）
+  await acquireSlot()
+  try {
+    let lastErr: unknown
+    // 重试：QPS 超限（错误码 18）/ 限流 / 网络抖动为可重试错误，最多 3 次、指数退避（500ms→1s→2s）
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const token = await getBaiduToken()
+        const res = await fetch(`${VAT_URL}?access_token=${token}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          // base64 为纯串（不带 data URI 前缀），按 urlencode 提交；参数名随文件类型变化
+          body: `${paramName}=${encodeURIComponent(base64)}`,
+        })
+        const json = (await res.json()) as {
+          error_code?: number
+          error_msg?: string
+          words_result?: Record<string, unknown>
+        }
+        if (json.error_code) {
+          const retryable =
+            json.error_code === 18 || /qps|rate.?limit|频繁|limit/i.test(json.error_msg || '')
+          const err = new Error(`百度 OCR 错误 ${json.error_code}: ${json.error_msg || ''}`)
+          // 用标记位记录是否可重试，交给外层判断是否继续退避
+          ;(err as { ocrRetryable?: boolean }).ocrRetryable = retryable
+          throw err
+        }
+
+        const wr = json.words_result || {}
+        return {
+          // vat_invoice 字段映射（与本地解析抽出的字段对齐）
+          invoiceCode: pick(wr, 'InvoiceCode'), // 发票代码
+          invoiceNumber: pick(wr, 'InvoiceNum'), // 发票号码
+          invoiceDate: pick(wr, 'InvoiceDate'), // 开票日期
+          sellerName: pick(wr, 'SellerName'), // 销售方名称
+          sellerTaxId: pick(wr, 'SellerRegisterNum'), // 销售方纳税人识别号
+          buyerName: pick(wr, 'PurchaserName'), // 购买方名称
+          amount: pick(wr, 'TotalAmount'), // 合计金额（不含税）
+          taxAmount: pick(wr, 'TotalTax'), // 合计税额
+          totalAmount: pick(wr, 'AmountInFiguers'), // 价税合计（小写）
+          // 把百度返回的全部结构化字段存为原文，前端「核对」页可查看/人工校对
+          rawText: JSON.stringify(wr, null, 2),
+        }
+      } catch (e) {
+        lastErr = e
+        const retryable =
+          (e as { ocrRetryable?: boolean })?.ocrRetryable || isRetryableOcrError(e)
+        if (!retryable || attempt === 2) throw e
+        await sleep(500 * Math.pow(2, attempt)) // 500ms, 1s, 2s
+      }
+    }
+    throw lastErr
+  } finally {
+    releaseSlot()
   }
 }

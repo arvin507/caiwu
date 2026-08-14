@@ -19,7 +19,11 @@ export async function GET(req: NextRequest) {
   const list = await prisma.reimbursement.findMany({
     where,
     orderBy: { createdAt: 'desc' },
-    include: { items: true, trip: true, legs: true },
+    include: {
+      items: { include: { links: { include: { invoice: true } } } },
+      trip: true,
+      legs: { include: { links: { include: { invoice: true } } } },
+    },
   })
   return NextResponse.json(list)
 }

@@ -20,6 +20,7 @@ import type {
   ReimbursementItem,
   ReimbursementLeg,
   ReimbursementStatus,
+  InvoiceLink,
 } from '@/types'
 import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
@@ -99,9 +100,33 @@ export default function ReimbursementDetailDrawer({
     invoiceId?: string | null
   } | null>(null)
 
-  const openLink = (type: 'item' | 'leg', id: string, invoiceId?: string | null) => {
-    setLinkLine({ type, id, invoiceId })
+  const openLink = (type: 'item' | 'leg', id: string) => {
+    setLinkLine({ type, id })
     setLinkOpen(true)
+  }
+
+  // 解除某张发票与当前行的关联（仅删对应 InvoiceLink，不影响该发票的其它关联）
+  const handleUnlink = async (type: 'item' | 'leg', lineId: string, invoiceId: string) => {
+    try {
+      const res = await fetch(`/api/reimbursements/${reb?.id}/link`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ lineType: type, lineId, invoiceId }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || '解除失败')
+      }
+      const updated = (await res.json()) as Reimbursement
+      message.success('已解除关联')
+      setReb(updated)
+      onChanged()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '解除失败')
+    }
   }
 
   const previewInvoice = async (invoiceId: string) => {
@@ -111,6 +136,37 @@ export default function ReimbursementDetailDrawer({
       message.error(e instanceof Error ? e.message : '预览失败')
     }
   }
+
+  // 渲染一行已关联的发票列表（支持 1:N：多张发票；N:1：allocatedAmount 分摊额）
+  const renderLinkedInvoices = (
+    line: { id: string; links?: InvoiceLink[] },
+    type: 'item' | 'leg',
+  ) => (
+    <Space direction="vertical" size={2} style={{ width: '100%' }} align="start">
+      {(line.links ?? []).map((l) => (
+        <Space size="small" key={l.id} wrap>
+          <Tag color="success">
+            {l.invoice?.invoiceNumber || l.invoice?.fileName || '发票'}
+            {l.allocatedAmount ? ` 分摊¥${l.allocatedAmount}` : ''}
+          </Tag>
+          <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
+            查看
+          </Button>
+          <Popconfirm
+            title="解除该发票与本行的关联？"
+            onConfirm={() => handleUnlink(type, line.id, l.invoiceId)}
+          >
+            <Button type="link" size="small" danger>
+              解除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ))}
+      <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
+        关联
+      </Button>
+    </Space>
+  )
 
   const callStatus = async (action: string, reason?: string) => {
     if (!reb) return
@@ -177,19 +233,7 @@ export default function ReimbursementDetailDrawer({
     {
       title: '发票',
       key: 'invoice',
-      render: (_: unknown, r: ReimbursementLeg) => (
-        <Space size="small">
-          {r.invoice ? <Tag color="success">已关联</Tag> : <Tag>未关联</Tag>}
-          <Button type="link" size="small" onClick={() => openLink('leg', r.id, r.invoiceId)}>
-            关联
-          </Button>
-          {r.invoice ? (
-            <Button type="link" size="small" onClick={() => previewInvoice(r.invoice!.id)}>
-              查看
-            </Button>
-          ) : null}
-        </Space>
-      ),
+      render: (_: unknown, r: ReimbursementLeg) => renderLinkedInvoices(r, 'leg'),
     },
   ]
 
@@ -208,19 +252,7 @@ export default function ReimbursementDetailDrawer({
     {
       title: '发票',
       key: 'invoice',
-      render: (_: unknown, r: ReimbursementItem) => (
-        <Space size="small">
-          {r.invoice ? <Tag color="success">已关联</Tag> : <Tag>未关联</Tag>}
-          <Button type="link" size="small" onClick={() => openLink('item', r.id, r.invoiceId)}>
-            关联
-          </Button>
-          {r.invoice ? (
-            <Button type="link" size="small" onClick={() => previewInvoice(r.invoice!.id)}>
-              查看
-            </Button>
-          ) : null}
-        </Space>
-      ),
+      render: (_: unknown, r: ReimbursementItem) => renderLinkedInvoices(r, 'item'),
     },
   ]
 

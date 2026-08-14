@@ -25,6 +25,15 @@ export async function DELETE(
   const inv = await prisma.invoice.findUnique({ where: { id } })
   if (!inv) return NextResponse.json({ error: '发票不存在' }, { status: 404 })
 
+  // 已关联报销单：不允许删除，避免孤儿外键
+  const linked = await prisma.invoiceLink.findFirst({
+    where: { invoiceId: id },
+    select: { id: true },
+  })
+  if (linked) {
+    return NextResponse.json({ error: '该发票已关联报销单，无法删除' }, { status: 400 })
+  }
+
   await prisma.invoice.delete({ where: { id } })
   try {
     await unlink(path.join(UPLOAD_DIR, path.basename(inv.storagePath)))

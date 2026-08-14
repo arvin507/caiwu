@@ -141,8 +141,8 @@ export default function Reimbursements() {
     invoiceId?: string | null
   } | null>(null)
 
-  const openLink = (type: 'item' | 'leg', id: string, invoiceId?: string | null) => {
-    setLinkLine({ type, id, invoiceId })
+  const openLink = (type: 'item' | 'leg', id: string) => {
+    setLinkLine({ type, id })
     setLinkOpen(true)
   }
 
@@ -273,20 +273,26 @@ export default function Reimbursements() {
   ]
 
   // 展开行里「发票」单元格（明细项 / 行程段通用，按 lineType 区分）
+  // 渲染该行已关联的发票列表（支持 1:N 多张；N:1 时显示分摊额）
   const renderInvoiceCell = (
-    line: { id: string; invoiceId?: string | null; invoice?: { id: string } | null },
+    line: { id: string; links?: { id: string; invoiceId: string; invoice?: { invoiceNumber?: string | null; fileName?: string | null } | null; allocatedAmount?: string | null }[] },
     type: 'item' | 'leg',
   ) => (
-    <Space size="small">
-      {line.invoice ? <Tag color="success">已关联</Tag> : <Tag>未关联</Tag>}
-      <Button type="link" size="small" onClick={() => openLink(type, line.id, line.invoiceId)}>
+    <Space direction="vertical" size={2} style={{ width: '100%' }} align="start">
+      {(line.links ?? []).map((l) => (
+        <Space size="small" key={l.id} wrap>
+          <Tag color="success">
+            {l.invoice?.invoiceNumber || l.invoice?.fileName || '发票'}
+            {l.allocatedAmount ? ` 分摊¥${l.allocatedAmount}` : ''}
+          </Tag>
+          <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
+            查看
+          </Button>
+        </Space>
+      ))}
+      <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
         关联
       </Button>
-      {line.invoice ? (
-        <Button type="link" size="small" onClick={() => previewInvoice(line.invoice!.id)}>
-          查看
-        </Button>
-      ) : null}
     </Space>
   )
 

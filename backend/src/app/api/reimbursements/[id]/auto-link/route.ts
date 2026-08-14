@@ -1,29 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
-import { isInvoiceOccupied } from '@/lib/reimbursementLink'
 
 export const runtime = 'nodejs'
 
 /** 金额统一到「分」比较，吸收浮点误差与个位数不一致（如 4794.52 vs 4794.5） */
 const round2 = (n: number) => Math.round(n * 100) / 100
 
+const includeReb = {
+  items: { include: { links: { include: { invoice: true } } } },
+  trip: true,
+  legs: { include: { links: { include: { invoice: true } } } },
+} as const
+
 /**
  * POST /api/reimbursements/:id/auto-link
- * 批量上传的发票按金额自动关联到本报销单的明细行。
+ * 批量上传的发票按金额自动关联到本报销单「尚未关联」的明细行（通过发票关联表）。
  *
- * body: { invoiceIds: string[] } —— 本次上传返回的一批发票 id
+ * body: { invoiceIds: string[] }
  *
- * 匹配规则（保守策略）：
- *  - 仅用「本单尚未关联」的明细行（items + legs）参与匹配
+ * 匹配规则（保守策略，自动只做 1:1 精确匹配；1:N / N:1 分摊由人工在弹窗完成）：
+ *  - 仅用「本单尚未关联（links 为空）」的明细行参与匹配
  *  - 仅用「解析成功且能拿到价税合计」的发票参与匹配
  *  - 每张合格发票，在剩余未关联行里找金额（精确到分）相等的行：
- *      恰好 1 行  → 自动关联
+ *      恰好 1 行  → 自动关联（写一条 InvoiceLink）
  *      0 行       → 进 unmatched（无对应明细金额）
  *      ≥2 行      → 进 unmatched（金额重复，需人工，避免挂错）
- *  - 发票解析失败 / 无金额 / 已被其它单占用 → 进 unmatched
  *
- * 返回 { linked: [...], unmatched: [...] }，前端据此展示并引导人工补关联。
+ * 返回 { linked, unmatched, reimbursement }，前端据此刷新详情/列表。
  */
 export async function POST(
   req: NextRequest,
@@ -51,8 +55,8 @@ export async function POST(
   const full = await prisma.reimbursement.findUnique({
     where: { id },
     include: {
-      items: { where: { invoiceId: null } },
-      legs: { where: { invoiceId: null } },
+      items: { where: { links: { none: {} } } },
+      legs: { where: { links: { none: {} } } },
     },
   })
   if (!full) return NextResponse.json({ error: '报销单不存在' }, { status: 404 })
@@ -87,7 +91,7 @@ export async function POST(
     invoiceId: string
     invoiceNumber: string | null
     amount: number | null
-    reason: 'parseFailed' | 'noMatch' | 'ambiguous' | 'occupied'
+    reason: 'parseFailed' | 'noMatch' | 'ambiguous'
   }> = []
   // 已自动关联的行，避免被同批次另一张发票重复占用
   const usedLineIds = new Set<string>()
@@ -128,26 +132,14 @@ export async function POST(
     }
 
     const line = matches[0]
-    // 保险：发票是否已被其它报销单的行占用
-    if (await isInvoiceOccupied(prisma, inv.id, line.id)) {
-      unmatched.push({
-        invoiceId: inv.id,
-        invoiceNumber: inv.invoiceNumber,
-        amount: amt,
-        reason: 'occupied',
-      })
-      continue
-    }
-
+    // 写一条关联（1:1 精确匹配）；同一发票可再被人工关联到其它行（N:1）
     if (line.type === 'item') {
-      await prisma.reimbursementItem.update({
-        where: { id: line.id },
-        data: { invoiceId: inv.id },
+      await prisma.invoiceLink.create({
+        data: { invoiceId: inv.id, reimbursementItemId: line.id },
       })
     } else {
-      await prisma.reimbursementTripLeg.update({
-        where: { id: line.id },
-        data: { invoiceId: inv.id },
+      await prisma.invoiceLink.create({
+        data: { invoiceId: inv.id, reimbursementLegId: line.id },
       })
     }
     usedLineIds.add(line.id)
@@ -160,5 +152,10 @@ export async function POST(
     })
   }
 
-  return NextResponse.json({ linked, unmatched })
+  // 返回最新整单（含已关联发票），前端据此刷新详情/列表，使「已匹配」即时显示为已关联
+  const reimbursement = await prisma.reimbursement.findUnique({
+    where: { id },
+    include: includeReb,
+  })
+  return NextResponse.json({ linked, unmatched, reimbursement })
 }

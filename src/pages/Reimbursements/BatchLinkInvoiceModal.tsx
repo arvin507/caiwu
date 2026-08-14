@@ -7,6 +7,7 @@ import {
   DatePicker,
   Form,
   Input,
+  InputNumber,
   Modal,
   Select,
   Space,
@@ -46,6 +47,8 @@ interface AutoResult {
     amount: number | null
     reason: 'parseFailed' | 'noMatch' | 'ambiguous' | 'occupied'
   }>
+  /** auto-link 完成后返回的最新整单，用于刷新父级（已匹配的「已关联」状态） */
+  reimbursement?: Reimbursement
 }
 
 interface Props {
@@ -93,18 +96,20 @@ export default function BatchLinkInvoiceModal({
   const [submitting, setSubmitting] = useState(false)
   const [autoResult, setAutoResult] = useState<AutoResult | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  // 待人工关联发票的分摊额（N:1 时填写，key 为发票 id）
+  const [allocMap, setAllocMap] = useState<Record<string, number>>({})
 
   // 本单所有「尚未关联」的明细行，作为人工关联的可选项（关联后由父刷新重算）
   const candidateLines = useMemo(() => {
     const items = (reimbursement.items ?? [])
-      .filter((i) => !i.invoiceId)
+      .filter((i) => !i.links?.length)
       .map((i) => ({
         type: 'item' as const,
         id: i.id,
         label: `费用 #${i.seq} ${i.category ?? ''} ${money(i.amount)}`.replace(/\s+/g, ' ').trim(),
       }))
     const legs = (reimbursement.legs ?? [])
-      .filter((l) => !l.invoiceId)
+      .filter((l) => !l.links?.length)
       .map((l) => ({
         type: 'leg' as const,
         id: l.id,
@@ -133,6 +138,7 @@ export default function BatchLinkInvoiceModal({
     setAutoResult(null)
     setSubmitting(false)
     setBusyId(null)
+    setAllocMap({})
   }
 
   const handleClose = () => {
@@ -204,6 +210,9 @@ export default function BatchLinkInvoiceModal({
       }
       const result = (await res.json()) as AutoResult
       setAutoResult(result)
+      // 关键：自动匹配成功后，用后端返回的最新整单刷新父级（详情抽屉 + 列表），
+      // 否则已关联的发票在 UI 上仍显示为「未关联」，造成"全部未关联"的错觉。
+      if (result.reimbursement) onLinked(result.reimbursement)
       if (result.linked.length) message.success(`已自动关联 ${result.linked.length} 张发票`)
       if (result.unmatched.length) message.info(`${result.unmatched.length} 张需手动关联`)
     } catch (e) {
@@ -213,11 +222,13 @@ export default function BatchLinkInvoiceModal({
     }
   }
 
-  // 步骤三：待人工的发票，手动选定目标行后关联
+  // 步骤三：待人工的发票，手动选定目标行（及可选分摊额）后关联。
+  // 同一张发票可多次关联到不同行（N:1 分摊）：每次调用带不同 lineId + allocatedAmount。
   const doManualLink = async (
     invoiceId: string,
     lineType: 'item' | 'leg',
     lineId: string,
+    allocatedAmount?: number | null,
   ) => {
     setBusyId(invoiceId)
     try {
@@ -227,7 +238,11 @@ export default function BatchLinkInvoiceModal({
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ lineType, lineId, invoiceId }),
+        body: JSON.stringify({
+          lineType,
+          lineId,
+          links: [{ invoiceId, allocatedAmount: allocatedAmount ?? null }],
+        }),
       })
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string }
@@ -236,11 +251,7 @@ export default function BatchLinkInvoiceModal({
       const updated = (await res.json()) as Reimbursement
       message.success('已关联发票')
       onLinked(updated) // 父刷新本单 → candidateLines 重算
-      setAutoResult((prev) =>
-        prev
-          ? { ...prev, unmatched: prev.unmatched.filter((u) => u.invoiceId !== invoiceId) }
-          : prev,
-      )
+      // 同一张发票可能还要分摊到其它行（N:1），故保留在待办列表，由用户点「完成」移除
     } catch (e) {
       message.error(e instanceof Error ? e.message : '关联失败')
     } finally {
@@ -273,14 +284,23 @@ export default function BatchLinkInvoiceModal({
       title: '操作',
       key: 'action',
       render: (_: unknown, r: AutoResult['unmatched'][number]) => (
-        <Space size="small">
+        <Space size="small" wrap>
+          <InputNumber
+            placeholder="分摊额"
+            size="small"
+            style={{ width: 110 }}
+            min={0}
+            precision={2}
+            value={allocMap[r.invoiceId]}
+            onChange={(v) => setAllocMap((m) => ({ ...m, [r.invoiceId]: v ?? 0 }))}
+          />
           <Select
             placeholder="选择明细行"
             style={{ width: 200 }}
             options={candidateLines.map((c) => ({ value: `${c.type}:${c.id}`, label: c.label }))}
             onSelect={(val: string) => {
               const [type, id] = val.split(':') as ['item' | 'leg', string]
-              void doManualLink(r.invoiceId, type, id)
+              void doManualLink(r.invoiceId, type, id, allocMap[r.invoiceId] || null)
             }}
             disabled={candidateLines.length === 0}
             loading={busyId === r.invoiceId}
@@ -297,6 +317,19 @@ export default function BatchLinkInvoiceModal({
             }}
           >
             查看
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            onClick={() =>
+              setAutoResult((prev) =>
+                prev
+                  ? { ...prev, unmatched: prev.unmatched.filter((u) => u.invoiceId !== r.invoiceId) }
+                  : prev,
+              )
+            }
+          >
+            完成
           </Button>
         </Space>
       ),

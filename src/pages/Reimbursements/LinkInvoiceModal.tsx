@@ -6,8 +6,10 @@ import type { Invoice, Reimbursement } from '@/types'
 import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
 
-/** /api/invoices/linkable 返回的发票，带关联标注 */
-type LinkableInvoice = Invoice & { linkedTo: { type: 'item' | 'leg'; id: string } | null }
+/** /api/invoices/linkable 返回的发票，带关联标注（支持 N:1，故 linkedTo 为数组） */
+type LinkableInvoice = Invoice & {
+  linkedTo: Array<{ type: 'item' | 'leg'; id: string; allocatedAmount?: number | null }>
+}
 
 interface Props {
   open: boolean
@@ -28,6 +30,10 @@ function invoiceAmount(inv: Invoice): string {
   return v ? `¥${isNaN(n) ? '0.00' : n.toFixed(2)}` : '—'
 }
 
+function isLinkedToCurrent(inv: LinkableInvoice, lineId: string): boolean {
+  return inv.linkedTo.some((l) => l.id === lineId)
+}
+
 export default function LinkInvoiceModal({
   open,
   reimbursementId,
@@ -42,10 +48,12 @@ export default function LinkInvoiceModal({
   const [list, setList] = useState<LinkableInvoice[]>([])
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   // 打开时拉取可关联发票列表
   useEffect(() => {
     if (!open) return
+    setSelectedRowKeys([])
     let cancelled = false
     ;(async () => {
       setLoading(true)
@@ -67,11 +75,45 @@ export default function LinkInvoiceModal({
     }
   }, [open, token, message])
 
-  const doLink = async (invoiceId: string | null) => {
-    setBusyId(invoiceId ?? 'unlink')
+  // 关联选中（1:N：可一次选多张发票挂到当前行）
+  const doLinkMany = async () => {
+    if (selectedRowKeys.length === 0) return
+    setBusyId('link')
     try {
       const res = await fetch(`/api/reimbursements/${reimbursementId}/link`, {
         method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          lineType,
+          lineId,
+          links: selectedRowKeys.map((id) => ({ invoiceId: id })),
+        }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || '关联失败')
+      }
+      const updated = (await res.json()) as Reimbursement
+      message.success(`已关联 ${selectedRowKeys.length} 张发票`)
+      setSelectedRowKeys([])
+      onLinked(updated)
+      onClose()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '关联失败')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  // 解除某张发票与当前行的关联（仅删该 InvoiceLink，不动其它关联）
+  const doUnlink = async (invoiceId: string) => {
+    setBusyId(invoiceId)
+    try {
+      const res = await fetch(`/api/reimbursements/${reimbursementId}/link`, {
+        method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -80,26 +122,20 @@ export default function LinkInvoiceModal({
       })
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(err.error || '操作失败')
+        throw new Error(err.error || '解除失败')
       }
       const updated = (await res.json()) as Reimbursement
-      message.success(invoiceId ? '已关联发票' : '已解除关联')
+      message.success('已解除关联')
       onLinked(updated)
-      onClose()
     } catch (e) {
-      message.error(e instanceof Error ? e.message : '操作失败')
+      message.error(e instanceof Error ? e.message : '解除失败')
     } finally {
       setBusyId(null)
     }
   }
 
   const columns: ColumnsType<LinkableInvoice> = [
-    {
-      title: '归属人',
-      dataIndex: 'ownerName',
-      key: 'ownerName',
-      render: (v: string) => v || '—',
-    },
+    { title: '归属人', dataIndex: 'ownerName', key: 'ownerName', render: (v: string) => v || '—' },
     {
       title: '发票号码',
       dataIndex: 'invoiceNumber',
@@ -112,79 +148,74 @@ export default function LinkInvoiceModal({
       key: 'invoiceDate',
       render: (d: string) => formatDate(d),
     },
-    {
-      title: '金额',
-      key: 'amount',
-      render: (_, inv) => invoiceAmount(inv),
-    },
+    { title: '金额', key: 'amount', render: (_, inv) => invoiceAmount(inv) },
     {
       title: '状态',
       key: 'status',
       render: (_, inv) => {
-        if (!inv.linkedTo) return <Tag>未关联</Tag>
-        if (inv.linkedTo.id === lineId) return <Tag color="success">当前已关联</Tag>
-        return <Tag color="warning">已关联其它行</Tag>
+        if (isLinkedToCurrent(inv, lineId)) return <Tag color="success">本行已关联</Tag>
+        if (inv.linkedTo.length) return <Tag color="blue">已关联其它行</Tag>
+        return <Tag>未关联</Tag>
       },
     },
     {
       title: '操作',
       key: 'action',
-      render: (_, inv) => {
-        const isCurrent = inv.linkedTo?.id === lineId
-        const isOther = !!inv.linkedTo && !isCurrent
-        return (
-          <Space size="small">
+      render: (_, inv) => (
+        <Space size="small">
+          <Button
+            type="link"
+            size="small"
+            onClick={async () => {
+              try {
+                await openFilePreview(`/api/invoices/${inv.id}/file`, token)
+              } catch (e) {
+                message.error(e instanceof Error ? e.message : '预览失败')
+              }
+            }}
+          >
+            查看
+          </Button>
+          {isLinkedToCurrent(inv, lineId) ? (
             <Button
               type="link"
               size="small"
-              disabled={isOther || !!isCurrent}
+              danger
               loading={busyId === inv.id}
-              onClick={() => doLink(inv.id)}
+              onClick={() => doUnlink(inv.id)}
             >
-              关联
+              解除
             </Button>
-            <Button
-              type="link"
-              size="small"
-              disabled={!inv.linkedTo}
-              onClick={async () => {
-                try {
-                  await openFilePreview(`/api/invoices/${inv.id}/file`, token)
-                } catch (e) {
-                  message.error(e instanceof Error ? e.message : '预览失败')
-                }
-              }}
-            >
-              查看
-            </Button>
-            {isCurrent ? (
-              <Button
-                type="link"
-                size="small"
-                danger
-                loading={busyId === 'unlink'}
-                onClick={() => doLink(null)}
-              >
-                解除
-              </Button>
-            ) : null}
-          </Space>
-        )
-      },
+          ) : null}
+        </Space>
+      ),
     },
   ]
 
   return (
     <Modal
-      title="关联发票"
+      title="关联发票（可多选，支持一张行挂多张发票）"
       open={open}
       onCancel={onClose}
-      footer={null}
+      footer={
+        <Space>
+          <Button onClick={onClose}>取消</Button>
+          <Button
+            type="primary"
+            loading={busyId === 'link'}
+            disabled={selectedRowKeys.length === 0}
+            onClick={doLinkMany}
+          >
+            关联选中（{selectedRowKeys.length}）
+          </Button>
+        </Space>
+      }
       width={760}
       destroyOnClose
     >
       <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
-        每行（费用明细 / 行程段）可关联一张发票。已关联其它行的发票不可重复关联。
+        勾选一张或多张发票关联到当前行（1:N）。已关联其它行的发票（N:1）也可继续关联到此行，
+        分摊金额请在「批量关联发票」弹窗里填写。
       </Typography.Paragraph>
       <Table<LinkableInvoice>
         rowKey="id"
@@ -193,6 +224,7 @@ export default function LinkInvoiceModal({
         columns={columns}
         dataSource={list}
         pagination={{ pageSize: 8 }}
+        rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as string[]) }}
       />
     </Modal>
   )

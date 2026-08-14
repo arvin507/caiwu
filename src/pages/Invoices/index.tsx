@@ -11,6 +11,20 @@ import InvoiceDetailDrawer from './InvoiceDetailDrawer'
 
 type Row = Invoice & { key: string }
 
+/** 解析明细字段（与核对抽屉一致，用于列表展开行展示） */
+const DETAIL_FIELDS: { key: string; label: string }[] = [
+  { key: 'invoiceCode', label: '发票代码' },
+  { key: 'invoiceNumber', label: '发票号码' },
+  { key: 'invoiceDate', label: '开票日期' },
+  { key: 'sellerName', label: '销售方名称' },
+  { key: 'sellerTaxId', label: '纳税人识别号' },
+  { key: 'buyerName', label: '购买方名称' },
+  { key: 'amount', label: '金额' },
+  { key: 'taxAmount', label: '税额' },
+  { key: 'totalAmount', label: '价税合计' },
+]
+const MONEY_KEYS = new Set(['amount', 'taxAmount', 'totalAmount'])
+
 /**
  * 发票管理：列表展示 + 排序切换 + 空状态引导 + 上传入口。
  * 数据来自后端服务（Next.js，store.loadInvoices 拉取 /api/invoices）。
@@ -100,7 +114,6 @@ export default function Invoices() {
       key: 'invoiceDate',
       render: (d: string) => formatDate(d),
     },
-    { title: '文件名', dataIndex: 'fileName', key: 'fileName' },
     {
       title: '上传时间',
       dataIndex: 'uploadedAt',
@@ -135,6 +148,40 @@ export default function Invoices() {
         if (row.parseStatus === 'failed') return <Tag color="error">失败</Tag>
         if (row.parseStatus === 'pending') return <Tag color="processing">解析中</Tag>
         return <Tag>未解析</Tag>
+      },
+    },
+    {
+      title: '关联状态',
+      key: 'linked',
+      render: (_, row) =>
+        row.linkedTo && row.linkedTo.length ? (
+          <Tag color="success">已关联({row.linkedTo.length})</Tag>
+        ) : (
+          <Tag>未关联</Tag>
+        ),
+    },
+    {
+      title: '发票号码',
+      key: 'pInvoiceNumber',
+      render: (_, row) =>
+        row.parsedData?.invoiceNumber ?? <Typography.Text type="secondary">—</Typography.Text>,
+    },
+    {
+      title: '销售方',
+      key: 'pSeller',
+      render: (_, row) =>
+        row.parsedData?.sellerName ?? <Typography.Text type="secondary">—</Typography.Text>,
+    },
+    {
+      title: '价税合计',
+      key: 'pTotal',
+      render: (_, row) => {
+        const v = row.parsedData?.totalAmount
+        return v ? (
+          <span>¥{v}</span>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        )
       },
     },
     {
@@ -212,6 +259,48 @@ export default function Invoices() {
             selectedRowKeys,
             onChange: (keys) => setSelectedRowKeys(keys as string[]),
           }}
+          expandable={{
+            expandedRowRender: (row) => {
+              const pd = row.parsedData
+              if (!pd) {
+                return <Typography.Text type="secondary">暂无解析明细</Typography.Text>
+              }
+              return (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '12px 24px',
+                    padding: '4px 8px',
+                  }}
+                >
+                  {DETAIL_FIELDS.map((f) => {
+                    const v = pd[f.key]
+                    return (
+                      <div key={f.key}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {f.label}
+                        </Typography.Text>
+                        <div style={{ marginTop: 2 }}>
+                          {v ? (
+                            MONEY_KEYS.has(f.key as string) ? (
+                              `¥${v}`
+                            ) : (
+                              String(v)
+                            )
+                          ) : (
+                            <Typography.Text type="secondary">—</Typography.Text>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            },
+            rowExpandable: (row) => !!row.parsedData,
+          }}
+          scroll={{ x: 'max-content' }}
           pagination={{ pageSize: 10 }}
         />
       )}

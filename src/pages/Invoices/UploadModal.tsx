@@ -95,20 +95,22 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
     }
     setSubmitting(true)
     try {
-      const { created, skipped } = await addInvoices({
+      const { created, updated, skipped } = await addInvoices({
         ownerName: values.ownerName.trim(),
         invoiceDate: values.invoiceDate.format('YYYY-MM-DD'),
         files: selected.map((s) => s.file),
         note: values.note?.trim(),
       })
       if (created.length) message.success(`已存档 ${created.length} 张发票`)
+      // 同一文件/发票号重复上传 → 幂等更新已有记录（不新增），正常情况，提示即可
+      if (updated.length) message.info(`已更新 ${updated.length} 张（同一文件/发票号已存在，已覆盖）`)
       if (skipped.length) {
         const names = skipped
-          .map((s) => `${s.fileName}（号码 ${s.invoiceNumber}）`)
+          .map((s) => `${s.fileName}（${s.reason}）`)
           .join('、')
-        message.warning(`已跳过 ${skipped.length} 张重复发票（号码已存在）：${names}`)
+        message.warning(`已跳过 ${skipped.length} 张：${names}`)
       }
-      if (!created.length && !skipped.length) {
+      if (!created.length && !updated.length && !skipped.length) {
         message.error('没有文件被处理')
       }
       handleClose()

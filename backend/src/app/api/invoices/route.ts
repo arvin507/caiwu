@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { parseInvoice } from '@/lib/invoiceParser'
 import { writeFile, mkdir, unlink } from 'fs/promises'
+import { createHash } from 'crypto'
 import path from 'path'
 
 export const runtime = 'nodejs'
@@ -12,16 +13,38 @@ const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
 export async function GET() {
   const invoices = await prisma.invoice.findMany({
     orderBy: { uploadedAt: 'desc' },
+    include: {
+      links: {
+        select: {
+          id: true,
+          reimbursementItemId: true,
+          reimbursementLegId: true,
+          allocatedAmount: true,
+        },
+      },
+    },
   })
-  return NextResponse.json(invoices)
+  // 标注每张发票当前已关联到哪些报销明细行（支持 N:1，故为数组）
+  const data = invoices.map((inv) => ({
+    ...inv,
+    linkedTo: inv.links.map((l) => ({
+      type: l.reimbursementItemId ? ('item' as const) : ('leg' as const),
+      id: l.reimbursementItemId ?? l.reimbursementLegId,
+      allocatedAmount: l.allocatedAmount != null ? Number(l.allocatedAmount) : null,
+    })),
+  }))
+  return NextResponse.json(data)
 }
 
 // POST /api/invoices —— 上传发票（multipart/form-data 标准方式）
 // 字段：ownerName(必填) / invoiceDate / note / files(文件数组，可批量)
 // 兼容旧调用：仍接受单个 file 字段。
 //
-// 去重逻辑：每张文件先同步解析，拿到发票号码后在落库前查重；
-// 若号码已存在于其它记录，则删除本次落盘文件、不建记录，并记入 skipped（提示用户）。
+// 去重 / 幂等逻辑（避免「失败重试成功」产生两条记录）：
+//  1. 计算文件内容 sha256 作为 fileHash；
+//  2. 先按 fileHash、再按发票号码(invoiceNumber) 查重；
+//  3. 命中已有记录 → 「更新」该记录（覆盖解析结果），而不是新建；仅当命中记录已关联
+//     报销单时才跳过(skipped)，避免覆盖在用数据。
 export async function POST(req: NextRequest) {
   const form = await req.formData()
 
@@ -45,9 +68,10 @@ export async function POST(req: NextRequest) {
   // 文件落盘 backend/uploads/（不再用 base64 塞 JSON，省内存、可流式）
   await mkdir(UPLOAD_DIR, { recursive: true })
 
-  // 循环处理每个文件：落盘 → 解析 → 去重 → 建记录
+  // 循环处理每个文件：落盘 → 解析 → 去重 → 新建/更新记录
   const created: Array<Awaited<ReturnType<typeof prisma.invoice.create>>> = []
-  const skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string }> = []
+  const updated: Array<Awaited<ReturnType<typeof prisma.invoice.update>>> = []
+  const skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string; reason: string }> = []
 
   for (const file of files) {
     const ext = path.extname(file.name) || ''
@@ -56,7 +80,10 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await file.arrayBuffer())
     await writeFile(absPath, buffer)
 
-    // 先解析，拿到发票号码用于去重（解析失败则无号码，无法去重，按失败落库）
+    // 文件内容指纹：重复上传（含「先失败、后重试成功」）靠它幂等去重
+    const fileHash = createHash('sha256').update(buffer).digest('hex')
+
+    // 先解析，拿到发票号码（解析失败则无号码，但仍可凭 fileHash 去重）
     let parsed: Awaited<ReturnType<typeof parseInvoice>> | null = null
     let parseError: string | null = null
     try {
@@ -66,17 +93,48 @@ export async function POST(req: NextRequest) {
     }
     const invoiceNumber = parsed?.invoiceNumber || null
 
-    // 去重：发票号码已存在于其它记录 → 删除本次文件、不建记录、提示用户
-    if (invoiceNumber) {
-      const dup = await prisma.invoice.findFirst({
-        where: { invoiceNumber },
+    // 去重查询：优先 fileHash（同一文件，失败记录也带此值），其次发票号码
+    let existing = fileHash
+      ? await prisma.invoice.findFirst({ where: { fileHash }, select: { id: true } })
+      : null
+    if (!existing && invoiceNumber) {
+      existing = await prisma.invoice.findFirst({ where: { invoiceNumber }, select: { id: true } })
+    }
+
+    if (existing) {
+      // 已关联报销单的记录不覆盖，避免影响在用数据 → 跳过本次上传
+      const linked = await prisma.invoiceLink.findFirst({
+        where: { invoiceId: existing.id },
         select: { id: true },
       })
-      if (dup) {
-        await unlink(absPath).catch(() => {}) // 丢弃本次上传的落盘文件
-        skipped.push({ fileName: file.name, invoiceNumber, existingId: dup.id })
+      if (linked) {
+        await unlink(absPath).catch(() => {}) // 丢弃本次落盘文件
+        skipped.push({
+          fileName: file.name,
+          invoiceNumber: invoiceNumber ?? '',
+          existingId: existing.id,
+          reason: '已关联报销单',
+        })
         continue
       }
+      // 幂等更新：复写解析结果，保留原记录的文件与 id（不新建第二条）
+      const inv = await prisma.invoice.update({
+        where: { id: existing.id },
+        data: {
+          ownerName,
+          fileName: file.name,
+          fileType: file.type,
+          invoiceDate: invoiceDate ? new Date(invoiceDate) : undefined,
+          note,
+          invoiceNumber,
+          parseStatus: parsed ? 'done' : 'failed',
+          parsedData: parsed as any,
+          parseError,
+        },
+      })
+      await unlink(absPath).catch(() => {}) // 丢弃本次新写入的文件，复用原记录文件
+      updated.push(inv)
+      continue
     }
 
     // 未重复：建记录并直接写入解析结果（parseStatus 同步为 done / failed）
@@ -88,6 +146,7 @@ export async function POST(req: NextRequest) {
         invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
         note,
         storagePath: `/uploads/${storageName}`,
+        fileHash,
         invoiceNumber,
         parseStatus: parsed ? 'done' : 'failed',
         parsedData: parsed as any,
@@ -97,7 +156,7 @@ export async function POST(req: NextRequest) {
     created.push(inv)
   }
 
-  return NextResponse.json({ created, skipped }, { status: 201 })
+  return NextResponse.json({ created, updated, skipped }, { status: 201 })
 }
 
 // DELETE /api/invoices —— 批量删除（body: { ids: string[] }）
@@ -126,16 +185,12 @@ export async function DELETE(req: NextRequest) {
       skipped.push({ id, reason: '发票不存在' })
       continue
     }
-    // 已关联报销明细：不删，避免孤儿外键
-    const linkedItem = await prisma.reimbursementItem.findFirst({
+    // 已关联报销明细（通过发票关联表）：不删，避免孤儿外键
+    const linked = await prisma.invoiceLink.findFirst({
       where: { invoiceId: id },
       select: { id: true },
     })
-    const linkedLeg = await prisma.reimbursementTripLeg.findFirst({
-      where: { invoiceId: id },
-      select: { id: true },
-    })
-    if (linkedItem || linkedLeg) {
+    if (linked) {
       skipped.push({ id, reason: '已关联报销单，无法删除' })
       continue
     }
