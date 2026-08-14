@@ -17,6 +17,7 @@ import type { ColumnsType } from 'antd/es/table'
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
+  DeleteOutlined,
   FileTextOutlined,
   PlusOutlined,
   UploadOutlined,
@@ -73,6 +74,8 @@ export default function Reimbursements() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
   const [active, setActive] = useState<Reimbursement | null>(null)
+  // 多选批量删除：当前选中的行 id
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   // 用 ref 持有最新 active，避免在 load 回调闭包里拿到过期值
   const activeRef = useRef<Reimbursement | null>(null)
@@ -154,6 +157,35 @@ export default function Reimbursements() {
   useEffect(() => {
     load()
   }, [load])
+
+  // 批量删除：调 DELETE /api/reimbursements（body { ids }）
+  const handleBatchDelete = async () => {
+    if (selectedRowKeys.length === 0) return
+    try {
+      const res = await authFetch('/api/reimbursements', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedRowKeys }),
+      })
+      const data = (await res.json().catch(() => ({}))) as {
+        deleted?: string[]
+        skipped?: Array<{ id: string; reason: string }>
+        error?: string
+      }
+      if (!res.ok) throw new Error(data.error || '批量删除失败')
+      const deletedCount = data.deleted?.length ?? 0
+      const skippedCount = data.skipped?.length ?? 0
+      if (skippedCount > 0) {
+        msg.warning(`已删除 ${deletedCount} 张，跳过 ${skippedCount} 张（无权限或不存在）`)
+      } else {
+        msg.success(`已删除 ${deletedCount} 张报销单`)
+      }
+      setSelectedRowKeys([])
+      load()
+    } catch (e) {
+      msg.error(e instanceof Error ? e.message : '批量删除失败')
+    }
+  }
 
   const handleDelete = async (id: string) => {
     try {
@@ -406,6 +438,38 @@ export default function Reimbursements() {
         </Col>
       </Row>
 
+      {/* 多选批量删除工具条：仅在选中项时出现 */}
+      {selectedRowKeys.length > 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 16,
+            padding: '10px 16px',
+            background: '#f0f5ff',
+            borderRadius: 8,
+          }}
+        >
+          <Typography.Text>已选 {selectedRowKeys.length} 项</Typography.Text>
+          <Popconfirm
+            title={`确定删除选中的 ${selectedRowKeys.length} 张报销单？`}
+            description="删除后不可恢复"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={handleBatchDelete}
+          >
+            <Button danger icon={<DeleteOutlined />}>
+              批量删除
+            </Button>
+          </Popconfirm>
+          <Button type="link" onClick={() => setSelectedRowKeys([])}>
+            取消选择
+          </Button>
+        </div>
+      ) : null}
+
       <Card
         title="报销单列表"
         variant="borderless"
@@ -427,6 +491,10 @@ export default function Reimbursements() {
             dataSource={rows}
             columns={columns}
             expandable={{ expandedRowRender }}
+            rowSelection={{
+              selectedRowKeys,
+              onChange: (keys) => setSelectedRowKeys(keys as string[]),
+            }}
             pagination={{ pageSize: 10 }}
           />
         )}

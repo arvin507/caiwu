@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
 import { parseReimbursementFile, type ReimbursementType } from '@/lib/reimbursementParser'
-import { writeFile, mkdir } from 'fs/promises'
+import { writeFile, mkdir, unlink } from 'fs/promises'
 import path from 'path'
 
 export const runtime = 'nodejs'
@@ -115,4 +115,49 @@ export async function POST(req: NextRequest) {
   })
 
   return NextResponse.json(created, { status: 201 })
+}
+
+// DELETE /api/reimbursements —— 批量删除（body: { ids: string[] }）
+// 权限：本人提交 或 admin。无权限 / 不存在的 id 计入 skipped，不阻断其余删除。
+// 删除库记录（级联删 items/trip/legs）后，尽量删除落盘附件。
+export async function DELETE(req: NextRequest) {
+  const user = await getCurrentUser(req)
+  if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
+
+  let body: { ids?: unknown }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体不是合法 JSON' }, { status: 400 })
+  }
+  const ids = Array.isArray(body.ids) ? (body.ids as string[]).filter(Boolean) : []
+  if (ids.length === 0) {
+    return NextResponse.json({ error: '未提供要删除的报销单 id' }, { status: 400 })
+  }
+
+  const deleted: string[] = []
+  const skipped: Array<{ id: string; reason: string }> = []
+
+  for (const id of ids) {
+    const reb = await prisma.reimbursement.findUnique({
+      where: { id },
+      select: { id: true, submitterId: true, storagePath: true },
+    })
+    if (!reb) {
+      skipped.push({ id, reason: '报销单不存在' })
+      continue
+    }
+    if (user.role !== 'admin' && reb.submitterId !== user.id) {
+      skipped.push({ id, reason: '无权限删除' })
+      continue
+    }
+    await prisma.reimbursement.delete({ where: { id } })
+    if (reb.storagePath) {
+      const abs = path.join(process.cwd(), 'uploads', path.basename(reb.storagePath))
+      await unlink(abs).catch((e) => console.error('批量删除报销附件失败(可忽略):', e?.message))
+    }
+    deleted.push(id)
+  }
+
+  return NextResponse.json({ deleted, skipped })
 }

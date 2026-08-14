@@ -19,12 +19,15 @@ export default function Invoices() {
   const invoices = useAppStore((s) => s.invoices)
   const loadInvoices = useAppStore((s) => s.loadInvoices)
   const deleteInvoice = useAppStore((s) => s.deleteInvoice)
+  const deleteInvoices = useAppStore((s) => s.deleteInvoices)
   const token = useAppStore((s) => s.token)
   const [sortKey, setSortKey] = useState<InvoiceSortKey>('uploadedAt')
   const [uploadOpen, setUploadOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  // 多选批量删除：当前选中的行 id
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
   const openDetail = (inv: Invoice) => {
     setActiveInvoice(inv)
@@ -42,6 +45,24 @@ export default function Invoices() {
       message.error(e instanceof Error ? e.message : '删除失败')
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  // 批量删除：调 store.deleteInvoices（后端已关联报销单的会跳过）
+  const handleBatchDelete = async () => {
+    if (selectedRowKeys.length === 0) return
+    try {
+      const { deleted, skipped } = await deleteInvoices(selectedRowKeys)
+      if (skipped.length > 0) {
+        message.warning(
+          `已删除 ${deleted.length} 张，跳过 ${skipped.length} 张（已关联报销单或不存在）`,
+        )
+      } else {
+        message.success(`已删除 ${deleted.length} 张发票`)
+      }
+      setSelectedRowKeys([])
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '批量删除失败')
     }
   }
 
@@ -187,9 +208,45 @@ export default function Invoices() {
           rowKey="id"
           dataSource={rows}
           columns={columns}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys) => setSelectedRowKeys(keys as string[]),
+          }}
           pagination={{ pageSize: 10 }}
         />
       )}
+
+      {/* 多选批量删除工具条：仅在选中项时出现 */}
+      {selectedRowKeys.length > 0 ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 16,
+            padding: '10px 16px',
+            background: '#f0f5ff',
+            borderRadius: 8,
+          }}
+        >
+          <Typography.Text>已选 {selectedRowKeys.length} 项</Typography.Text>
+          <Popconfirm
+            title={`确定删除选中的 ${selectedRowKeys.length} 张发票？`}
+            description="删除后不可恢复"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            onConfirm={handleBatchDelete}
+          >
+            <Button danger icon={<DeleteOutlined />}>
+              批量删除
+            </Button>
+          </Popconfirm>
+          <Button type="link" onClick={() => setSelectedRowKeys([])}>
+            取消选择
+          </Button>
+        </div>
+      ) : null}
 
       <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
 

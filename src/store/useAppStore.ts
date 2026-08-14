@@ -67,6 +67,11 @@ interface AppState {
   }) => Promise<void>
   /** 删除发票：DELETE /api/invoices/:id（元数据 + 落盘文件），成功后从列表移除 */
   deleteInvoice: (id: string) => Promise<void>
+  /** 批量删除发票：DELETE /api/invoices（body { ids }），已关联报销的由后端跳过，成功后移除已删项 */
+  deleteInvoices: (ids: string[]) => Promise<{
+    deleted: string[]
+    skipped: Array<{ id: string; reason: string }>
+  }>
 
   // 鉴权相关
   login: (username: string, password: string) => Promise<void>
@@ -166,6 +171,25 @@ export const useAppStore = create<AppState>((set, get) => ({
       throw new Error(err.error || '删除失败')
     }
     set((state) => ({ invoices: state.invoices.filter((i) => i.id !== id) }))
+  },
+
+  // 批量删除发票：DELETE /api/invoices（body { ids }），成功从列表移除已删项
+  deleteInvoices: async (ids) => {
+    const res = await fetch('/api/invoices', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    })
+    const data = (await res.json().catch(() => ({}))) as {
+      deleted?: string[]
+      skipped?: Array<{ id: string; reason: string }>
+      error?: string
+    }
+    if (!res.ok) throw new Error(data.error || '批量删除失败')
+    set((state) => ({
+      invoices: state.invoices.filter((i) => !(data.deleted ?? []).includes(i.id)),
+    }))
+    return { deleted: data.deleted ?? [], skipped: data.skipped ?? [] }
   },
 
   // 登录：调后端校验，成功存 token + 用户信息（含 role）

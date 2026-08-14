@@ -99,3 +99,55 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ created, skipped }, { status: 201 })
 }
+
+// DELETE /api/invoices —— 批量删除（body: { ids: string[] }）
+// 已关联报销明细（item / leg）的发票跳过，避免留下孤儿关联；其余删除元数据 + 落盘文件。
+export async function DELETE(req: NextRequest) {
+  let body: { ids?: unknown }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ error: '请求体不是合法 JSON' }, { status: 400 })
+  }
+  const ids = Array.isArray(body.ids) ? (body.ids as string[]).filter(Boolean) : []
+  if (ids.length === 0) {
+    return NextResponse.json({ error: '未提供要删除的发票 id' }, { status: 400 })
+  }
+
+  const deleted: string[] = []
+  const skipped: Array<{ id: string; reason: string }> = []
+
+  for (const id of ids) {
+    const inv = await prisma.invoice.findUnique({
+      where: { id },
+      select: { id: true, storagePath: true },
+    })
+    if (!inv) {
+      skipped.push({ id, reason: '发票不存在' })
+      continue
+    }
+    // 已关联报销明细：不删，避免孤儿外键
+    const linkedItem = await prisma.reimbursementItem.findFirst({
+      where: { invoiceId: id },
+      select: { id: true },
+    })
+    const linkedLeg = await prisma.reimbursementTripLeg.findFirst({
+      where: { invoiceId: id },
+      select: { id: true },
+    })
+    if (linkedItem || linkedLeg) {
+      skipped.push({ id, reason: '已关联报销单，无法删除' })
+      continue
+    }
+    await prisma.invoice.delete({ where: { id } })
+    try {
+      await unlink(path.join(UPLOAD_DIR, path.basename(inv.storagePath)))
+    } catch (e) {
+      // 元数据已删；文件删除失败仅记录，不阻断响应（如文件已手动移除）
+      console.error('[批量删除] 删除落盘文件失败:', e)
+    }
+    deleted.push(id)
+  }
+
+  return NextResponse.json({ deleted, skipped })
+}
