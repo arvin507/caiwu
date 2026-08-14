@@ -26,6 +26,10 @@ model Invoice {
   parseError  String?                   // 解析失败时的错误信息
   invoiceNumber String?                 // 解析出的发票号码（独立列，用于去重/查询，避免 JSON path 在 MySQL 下报错）
 
+  // 反向关系：一张发票可被关联到「一条报销明细」或「一段差旅行程」（1:1，invoiceId 唯一约束保证）
+  reimbursementItems ReimbursementItem[]
+  reimbursementLegs  ReimbursementTripLeg[]
+
   @@index([invoiceNumber])
   @@map("invoices")
 }
@@ -85,6 +89,8 @@ model ReimbursementItem {
   summary         String? // 摘要
   amount          Decimal @db.Decimal(10, 2)
   note            String?
+  invoiceId       String? @unique // 关联的发票（1:1，唯一保证一张发票只挂一行）
+  invoice         Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
 
   @@map("reimbursement_items")
@@ -118,6 +124,8 @@ model ReimbursementTripLeg {
   toStation       String?
   amount          Decimal @db.Decimal(10, 2) // 金额小计（单值）
   ticketCount     Int? // 单据张数
+  invoiceId       String? @unique // 关联的发票（1:1，唯一保证一张发票只挂一行）
+  invoice         Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
 
   @@map("reimbursement_trip_legs")

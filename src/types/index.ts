@@ -99,6 +99,8 @@ export interface Invoice {
   parseError?: string | null
   /** 解析出的发票号码（独立列；用于前端展示与去重提示，避免依赖 JSON 字段） */
   invoiceNumber?: string | null
+  /** 关联发票专用：标注该发票当前已关联到哪一行（来自 /api/invoices/linkable） */
+  linkedTo?: { type: 'item' | 'leg'; id: string } | null
 }
 
 /** 发票本地解析得到的字段（键可为空，表示没抽出来） */
@@ -146,6 +148,10 @@ export interface ReimbursementItem {
   /** 金额（后端 Decimal 序列化为字符串，前端用 Number() 处理） */
   amount: string
   note?: string | null
+  /** 关联的发票 id（1:1，每行最多一张发票） */
+  invoiceId?: string | null
+  /** 关联的发票对象（详情接口嵌套返回） */
+  invoice?: Invoice | null
 }
 
 /** 差旅专用：出差信息（一对一） */
@@ -174,6 +180,10 @@ export interface ReimbursementLeg {
   toStation?: string | null
   amount: string
   ticketCount?: number | null
+  /** 关联的发票 id（1:1，每段最多一张发票） */
+  invoiceId?: string | null
+  /** 关联的发票对象（详情接口嵌套返回） */
+  invoice?: Invoice | null
 }
 
 /** 报销单（主表 + 关联子表） */

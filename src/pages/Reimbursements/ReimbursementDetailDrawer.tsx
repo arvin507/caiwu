@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Alert,
   App,
   Button,
+  Card,
   Descriptions,
   Drawer,
   Input,
@@ -12,15 +13,17 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { DollarOutlined } from '@ant-design/icons'
+import { DollarOutlined, FileTextOutlined } from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
 import type {
   Reimbursement,
+  ReimbursementItem,
   ReimbursementLeg,
   ReimbursementStatus,
 } from '@/types'
 import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
+import LinkInvoiceModal from './LinkInvoiceModal'
 
 const TYPE_LABEL: Record<string, string> = {
   travel: '差旅费',
@@ -80,7 +83,32 @@ export default function ReimbursementDetailDrawer({
   const [rejectOpen, setRejectOpen] = useState(false)
   const [rejectReason, setRejectReason] = useState('')
 
-  const reb = reimbursement
+  // 本地维护一份报销单数据：关联发票后后端返回最新整单，直接替换，无需重开抽屉
+  const [reb, setReb] = useState<Reimbursement | null>(reimbursement)
+  useEffect(() => {
+    setReb(reimbursement)
+  }, [reimbursement])
+
+  // 关联发票操作的状态
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkLine, setLinkLine] = useState<{
+    type: 'item' | 'leg'
+    id: string
+    invoiceId?: string | null
+  } | null>(null)
+
+  const openLink = (type: 'item' | 'leg', id: string, invoiceId?: string | null) => {
+    setLinkLine({ type, id, invoiceId })
+    setLinkOpen(true)
+  }
+
+  const previewInvoice = async (invoiceId: string) => {
+    try {
+      await openFilePreview(`/api/invoices/${invoiceId}/file`, token)
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '预览失败')
+    }
+  }
 
   const callStatus = async (action: string, reason?: string) => {
     if (!reb) return
@@ -144,6 +172,23 @@ export default function ReimbursementDetailDrawer({
       render: (v: string) => money(v),
     },
     { title: '单据', dataIndex: 'ticketCount', key: 'ticketCount' },
+    {
+      title: '发票',
+      key: 'invoice',
+      render: (_: unknown, r: ReimbursementLeg) => (
+        <Space size="small">
+          {r.invoice ? <Tag color="success">已关联</Tag> : <Tag>未关联</Tag>}
+          <Button type="link" size="small" onClick={() => openLink('leg', r.id, r.invoiceId)}>
+            关联
+          </Button>
+          {r.invoice ? (
+            <Button type="link" size="small" onClick={() => previewInvoice(r.invoice!.id)}>
+              查看
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
   ]
 
   // 费用明细表格（两类都有）
@@ -158,6 +203,23 @@ export default function ReimbursementDetailDrawer({
       render: (v: string) => money(v),
     },
     { title: '备注', dataIndex: 'note', key: 'note' },
+    {
+      title: '发票',
+      key: 'invoice',
+      render: (_: unknown, r: ReimbursementItem) => (
+        <Space size="small">
+          {r.invoice ? <Tag color="success">已关联</Tag> : <Tag>未关联</Tag>}
+          <Button type="link" size="small" onClick={() => openLink('item', r.id, r.invoiceId)}>
+            关联
+          </Button>
+          {r.invoice ? (
+            <Button type="link" size="small" onClick={() => previewInvoice(r.invoice!.id)}>
+              查看
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
   ]
 
   return (
@@ -199,66 +261,85 @@ export default function ReimbursementDetailDrawer({
             message="请核对以下系统解析结果，无误后提交即视为确认数据。"
           />
 
-          <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }}>
-            <Descriptions.Item label="申请人">
-              {reb.applicantName || '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="部门">{reb.department || '—'}</Descriptions.Item>
-            <Descriptions.Item label="项目">{reb.projectName || '—'}</Descriptions.Item>
-            <Descriptions.Item label="申请日期">
-              {reb.applyDate ? formatDate(reb.applyDate) : '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="合计金额">
-              <Typography.Text strong>{money(reb.totalAmount)}</Typography.Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="文件名">
-              {reb.fileName || '—'}
-            </Descriptions.Item>
-          </Descriptions>
+          <Card size="small" title="基本信息" style={{ marginBottom: 16 }}>
+            <Descriptions column={2} size="small">
+              <Descriptions.Item label="申请人">
+                {reb.applicantName || '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="部门">{reb.department || '—'}</Descriptions.Item>
+              <Descriptions.Item label="项目">{reb.projectName || '—'}</Descriptions.Item>
+              <Descriptions.Item label="申请日期">
+                {reb.applyDate ? formatDate(reb.applyDate) : '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="合计金额">
+                <Typography.Text strong style={{ color: '#cf1322', fontSize: 16 }}>
+                  {money(reb.totalAmount)}
+                </Typography.Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="文件名">
+                {reb.fileName || '—'}
+              </Descriptions.Item>
+            </Descriptions>
+          </Card>
 
           {/* 差旅：出差信息 + 行程段 */}
           {reb.type === 'travel' && reb.trip ? (
             <>
-              <Typography.Title level={5}>出差信息</Typography.Title>
-              <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }}>
-                <Descriptions.Item label="出差人">
-                  {reb.trip.travelerName || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="人数">
-                  {reb.trip.headcount ?? '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="起止时间">
-                  {reb.trip.dateRangeText || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="起止地点">
-                  {reb.trip.locationText || '—'}
-                </Descriptions.Item>
-                <Descriptions.Item label="出差事由" span={2}>
-                  {reb.trip.reason || '—'}
-                </Descriptions.Item>
-              </Descriptions>
+              <Card size="small" title="出差信息" style={{ marginBottom: 16 }}>
+                <Descriptions column={2} size="small">
+                  <Descriptions.Item label="出差人">
+                    {reb.trip.travelerName || '—'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="人数">
+                    {reb.trip.headcount ?? '—'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="起止时间">
+                    {reb.trip.dateRangeText || '—'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="起止地点">
+                    {reb.trip.locationText || '—'}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="出差事由" span={2}>
+                    {reb.trip.reason || '—'}
+                  </Descriptions.Item>
+                </Descriptions>
+              </Card>
 
-              <Typography.Title level={5}>行程段</Typography.Title>
-              <Table<ReimbursementLeg>
-                rowKey="id"
+              <Card
                 size="small"
-                pagination={false}
-                columns={legColumns}
-                dataSource={reb.legs ?? []}
+                title="行程段"
                 style={{ marginBottom: 16 }}
-              />
+                styles={{ body: { padding: 0 } }}
+              >
+                <Table<ReimbursementLeg>
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  columns={legColumns}
+                  dataSource={reb.legs ?? []}
+                />
+              </Card>
             </>
           ) : null}
 
           {/* 费用明细 */}
-          <Typography.Title level={5}>费用明细</Typography.Title>
-          <Table
-            rowKey="id"
+          <Card
             size="small"
-            pagination={false}
-            columns={itemColumns}
-            dataSource={reb.items}
-            summary={(rows) => {
+            title={
+              <Space>
+                <FileTextOutlined />
+                费用明细
+              </Space>
+            }
+            styles={{ body: { padding: 0 } }}
+          >
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              columns={itemColumns}
+              dataSource={reb.items}
+              summary={(rows) => {
               const total = rows.reduce((s, r) => s + Number(r.amount || 0), 0)
               return (
                 <Table.Summary.Row>
@@ -273,6 +354,7 @@ export default function ReimbursementDetailDrawer({
               )
             }}
           />
+          </Card>
 
           {reb.status === 'rejected' && reb.rejectReason ? (
             <Alert
@@ -375,6 +457,19 @@ export default function ReimbursementDetailDrawer({
           ) : null}
         </>
       )}
+
+      {/* 关联发票弹窗 */}
+      <LinkInvoiceModal
+        open={linkOpen}
+        reimbursementId={reb?.id ?? ''}
+        lineType={linkLine?.type ?? 'item'}
+        lineId={linkLine?.id ?? ''}
+        onClose={() => setLinkOpen(false)}
+        onLinked={(updated) => {
+          setReb(updated)
+          onChanged()
+        }}
+      />
     </Drawer>
   )
 }

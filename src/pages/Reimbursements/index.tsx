@@ -1,21 +1,38 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   App,
   Button,
+  Card,
+  Col,
   Empty,
   Popconfirm,
+  Row,
   Space,
+  Statistic,
   Table,
   Tag,
   Typography,
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
-import { PlusOutlined } from '@ant-design/icons'
+import {
+  CheckCircleOutlined,
+  ClockCircleOutlined,
+  FileTextOutlined,
+  PlusOutlined,
+  UploadOutlined,
+} from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
-import type { Reimbursement, ReimbursementStatus, ReimbursementType } from '@/types'
+import type {
+  Reimbursement,
+  ReimbursementItem,
+  ReimbursementLeg,
+  ReimbursementStatus,
+  ReimbursementType,
+} from '@/types'
 import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
 import UploadModal from './UploadModal'
+import LinkInvoiceModal from './LinkInvoiceModal'
 import ReimbursementDetailDrawer from './ReimbursementDetailDrawer'
 
 const TYPE_LABEL: Record<ReimbursementType, string> = {
@@ -104,6 +121,35 @@ export default function Reimbursements() {
       if (updated) setActive(updated)
     }
   }, [load])
+
+  // 关联发票后：用后端返回的最新整单就地替换对应行（展开区立即反映发票状态）
+  const applyUpdated = useCallback((updated: Reimbursement) => {
+    setRows((prev) =>
+      prev.map((r) => (r.id === updated.id ? { ...updated, key: updated.id } : r)),
+    )
+    setActive((prev) => (prev?.id === updated.id ? updated : prev))
+  }, [])
+
+  // 关联发票弹窗状态
+  const [linkOpen, setLinkOpen] = useState(false)
+  const [linkLine, setLinkLine] = useState<{
+    type: 'item' | 'leg'
+    id: string
+    invoiceId?: string | null
+  } | null>(null)
+
+  const openLink = (type: 'item' | 'leg', id: string, invoiceId?: string | null) => {
+    setLinkLine({ type, id, invoiceId })
+    setLinkOpen(true)
+  }
+
+  const previewInvoice = async (invoiceId: string) => {
+    try {
+      await openFilePreview(`/api/invoices/${invoiceId}/file`, token)
+    } catch (e) {
+      msg.error(e instanceof Error ? e.message : '预览失败')
+    }
+  }
 
   useEffect(() => {
     load()
@@ -194,39 +240,197 @@ export default function Reimbursements() {
     },
   ]
 
+  // 展开行里「发票」单元格（明细项 / 行程段通用，按 lineType 区分）
+  const renderInvoiceCell = (
+    line: { id: string; invoiceId?: string | null; invoice?: { id: string } | null },
+    type: 'item' | 'leg',
+  ) => (
+    <Space size="small">
+      {line.invoice ? <Tag color="success">已关联</Tag> : <Tag>未关联</Tag>}
+      <Button type="link" size="small" onClick={() => openLink(type, line.id, line.invoiceId)}>
+        关联
+      </Button>
+      {line.invoice ? (
+        <Button type="link" size="small" onClick={() => previewInvoice(line.invoice!.id)}>
+          查看
+        </Button>
+      ) : null}
+    </Space>
+  )
+
+  // 展开行：展示该报销单的明细。差旅展示「行程段 + 费用明细」，一般展示「费用明细」。
+  const expandedRowRender = (row: Row): ReactNode => {
+    if (row.type === 'travel') {
+      return (
+        <div style={{ paddingLeft: 32 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <div>
+              <Typography.Text strong>行程段</Typography.Text>
+              <Table<ReimbursementLeg>
+                rowKey="id"
+                size="small"
+                pagination={false}
+                dataSource={row.legs ?? []}
+                columns={[
+                  { title: '日期', dataIndex: 'legDate', key: 'legDate' },
+                  { title: '交通工具', dataIndex: 'transport', key: 'transport' },
+                  { title: '出发', dataIndex: 'fromStation', key: 'fromStation' },
+                  { title: '到达', dataIndex: 'toStation', key: 'toStation' },
+                  { title: '金额', dataIndex: 'amount', key: 'amount', render: (v: string) => money(v) },
+                  { title: '单据', dataIndex: 'ticketCount', key: 'ticketCount' },
+                  {
+                    title: '发票',
+                    key: 'invoice',
+                    render: (_, r) => renderInvoiceCell(r, 'leg'),
+                  },
+                ]}
+              />
+            </div>
+            <div>
+              <Typography.Text strong>费用明细</Typography.Text>
+              <Table<ReimbursementItem>
+                rowKey="id"
+                size="small"
+                pagination={false}
+                dataSource={row.items}
+                columns={[
+                  { title: '#', dataIndex: 'seq', key: 'seq', width: 48 },
+                  { title: '费用类型', dataIndex: 'category', key: 'category' },
+                  { title: '摘要', dataIndex: 'summary', key: 'summary' },
+                  { title: '金额', dataIndex: 'amount', key: 'amount', render: (v: string) => money(v) },
+                  {
+                    title: '发票',
+                    key: 'invoice',
+                    render: (_, r) => renderInvoiceCell(r, 'item'),
+                  },
+                ]}
+              />
+            </div>
+          </Space>
+        </div>
+      )
+    }
+    return (
+      <Table<ReimbursementItem>
+        rowKey="id"
+        size="small"
+        pagination={false}
+        dataSource={row.items}
+        columns={[
+          { title: '#', dataIndex: 'seq', key: 'seq', width: 48 },
+          { title: '费用类型', dataIndex: 'category', key: 'category' },
+          { title: '摘要', dataIndex: 'summary', key: 'summary' },
+          { title: '金额', dataIndex: 'amount', key: 'amount', render: (v: string) => money(v) },
+          {
+            title: '发票',
+            key: 'invoice',
+            render: (_, r) => renderInvoiceCell(r, 'item'),
+          },
+        ]}
+      />
+    )
+  }
+
+  // 顶部统计：按状态聚合
+  const stats = {
+    total: rows.length,
+    draft: rows.filter((r) => r.status === 'draft').length,
+    submitted: rows.filter((r) => r.status === 'submitted').length,
+    done: rows.filter((r) => r.status === 'approved' || r.status === 'paid').length,
+  }
+
   return (
     <div>
+      {/* 页面标题 + 描述 + 主操作 */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: 'flex-end',
           marginBottom: 16,
         }}
       >
-        <Typography.Title level={3} style={{ margin: 0 }}>
-          报销管理
-        </Typography.Title>
+        <div>
+          <Typography.Title level={3} style={{ margin: 0 }}>
+            报销管理
+          </Typography.Title>
+          <Typography.Text type="secondary">
+            上传报销单 Excel，系统自动解析并核对，关联发票后提交审批。
+          </Typography.Text>
+        </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setUploadOpen(true)}>
           上传报销单
         </Button>
       </div>
 
-      {rows.length === 0 && !loading ? (
-        <Empty description="还没有报销单，点击右上角「上传报销单」开始">
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setUploadOpen(true)}>
-            上传第一张报销单
-          </Button>
-        </Empty>
-      ) : (
-        <Table<Row>
-          rowKey="id"
-          loading={loading}
-          dataSource={rows}
-          columns={columns}
-          pagination={{ pageSize: 10 }}
-        />
-      )}
+      {/* 状态统计卡片 */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={6}>
+          <Card variant="borderless">
+            <Statistic
+              title="报销单总数"
+              value={stats.total}
+              prefix={<FileTextOutlined style={{ color: '#1677ff' }} />}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card variant="borderless">
+            <Statistic
+              title="待提交"
+              value={stats.draft}
+              valueStyle={{ color: '#8c8c8c' }}
+              prefix={<ClockCircleOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card variant="borderless">
+            <Statistic
+              title="待审批"
+              value={stats.submitted}
+              valueStyle={{ color: '#fa8c16' }}
+              prefix={<ClockCircleOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={6}>
+          <Card variant="borderless">
+            <Statistic
+              title="已通过 / 已付款"
+              value={stats.done}
+              valueStyle={{ color: '#52c41a' }}
+              prefix={<CheckCircleOutlined />}
+            />
+          </Card>
+        </Col>
+      </Row>
+
+      <Card
+        title="报销单列表"
+        variant="borderless"
+        styles={{ body: { padding: 0 } }}
+      >
+        {rows.length === 0 && !loading ? (
+          <Empty
+            style={{ padding: '48px 0' }}
+            description="还没有报销单，点击右上角「上传报销单」开始"
+          >
+            <Button type="primary" icon={<UploadOutlined />} onClick={() => setUploadOpen(true)}>
+              上传第一张报销单
+            </Button>
+          </Empty>
+        ) : (
+          <Table<Row>
+            rowKey="id"
+            loading={loading}
+            dataSource={rows}
+            columns={columns}
+            expandable={{ expandedRowRender }}
+            pagination={{ pageSize: 10 }}
+          />
+        )}
+      </Card>
 
       <UploadModal
         open={uploadOpen}
@@ -243,6 +447,18 @@ export default function Reimbursements() {
         isAdmin={!!isAdmin}
         onChanged={handleChanged}
         onClose={() => setDetailOpen(false)}
+      />
+
+      <LinkInvoiceModal
+        open={linkOpen}
+        reimbursementId={active?.id ?? ''}
+        lineType={linkLine?.type ?? 'item'}
+        lineId={linkLine?.id ?? ''}
+        onClose={() => setLinkOpen(false)}
+        onLinked={(updated) => {
+          applyUpdated(updated)
+          setLinkOpen(false)
+        }}
       />
     </div>
   )

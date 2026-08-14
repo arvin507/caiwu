@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Avatar, Dropdown, Layout, Menu, Space, Typography } from 'antd'
+import { Avatar, Breadcrumb, Dropdown, Layout, Menu, Space } from 'antd'
 import {
   BarChartOutlined,
   DashboardOutlined,
@@ -15,6 +15,19 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 
 const { Sider, Header, Content } = Layout
+
+// 路由 path -> 菜单标题（用于顶栏面包屑）
+const PAGE_TITLES: Record<string, string> = {
+  '/dashboard': '仪表盘',
+  '/transactions': '账单明细',
+  '/accounts': '账户管理',
+  '/invoices': '发票管理',
+  '/reimbursements': '报销管理',
+  '/reports': '统计报表',
+  '/settings': '系统设置',
+  '/users': '用户管理',
+  '/change-password': '修改密码',
+}
 
 /**
  * 主布局：经典的「左侧菜单 + 顶部栏 + 右侧内容区」中后台框架。
@@ -46,6 +59,9 @@ export default function MainLayout() {
       ? [{ key: '/users', icon: <TeamOutlined />, label: '用户管理' }]
       : []),
   ]
+
+  // 当前页面标题（面包屑末项）
+  const currentTitle = PAGE_TITLES[location.pathname] ?? '仪表盘'
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -81,11 +97,14 @@ export default function MainLayout() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+            zIndex: 1,
           }}
         >
-          <Typography.Title level={4} style={{ margin: '14px 0' }}>
-            财务管理系统
-          </Typography.Title>
+          <Breadcrumb
+            items={[{ title: '财务管理系统' }, { title: currentTitle }]}
+            style={{ fontSize: 14 }}
+          />
 
           {/* 右侧：当前登录用户 + 修改密码 / 退出 */}
           <Dropdown
@@ -109,7 +128,7 @@ export default function MainLayout() {
             </Space>
           </Dropdown>
         </Header>
-        <Content style={{ margin: 24 }}>
+        <Content style={{ padding: 24, background: '#f0f2f5' }}>
           {/* 路由出口：当前页面渲染在这里 */}
           <Outlet />
         </Content>

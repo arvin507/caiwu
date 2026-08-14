@@ -14,7 +14,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params
   const reb = await prisma.reimbursement.findUnique({
     where: { id },
-    include: { items: true, trip: true, legs: true },
+    include: {
+      items: { include: { invoice: true } },
+      trip: true,
+      legs: { include: { invoice: true } },
+    },
   })
   if (!reb) return NextResponse.json({ error: '报销单不存在' }, { status: 404 })
   if (user.role !== 'admin' && reb.submitterId !== user.id) {

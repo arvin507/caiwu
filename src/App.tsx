@@ -40,7 +40,20 @@ export default function App() {
       theme={{
         algorithm:
           themeMode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        token: { colorPrimary: '#1677ff' },
+        token: {
+          colorPrimary: '#1677ff',
+          borderRadius: 8,
+          colorBgLayout: '#f0f2f5',
+          controlHeight: 36,
+          fontFamily:
+            "system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif",
+        },
+        components: {
+          Card: { borderRadiusLG: 12 },
+          Menu: { itemBorderRadius: 8, itemMarginInline: 8, itemHeight: 44 },
+          Table: { headerBg: '#fafafa', headerColor: '#1f2329' },
+          Statistic: { contentFontSize: 28 },
+        },
       }}
     >
       <AntApp>
