@@ -121,3 +121,85 @@ export interface InvoiceParsedData {
 
 /** 发票列表排序方式 */
 export type InvoiceSortKey = 'uploadedAt' | 'invoiceDate'
+
+// ============ 报销管理 ============
+
+/** 报销类型：差旅费 / 一般费用 */
+export type ReimbursementType = 'travel' | 'general'
+
+/** 报销单状态机：草稿 → 已提交 → 已通过 / 已驳回 → 已付款 */
+export type ReimbursementStatus =
+  | 'draft'
+  | 'submitted'
+  | 'approved'
+  | 'rejected'
+  | 'paid'
+
+/** 通用费用明细（一般费用由它直接构成；差旅的费用汇总段也复用它） */
+export interface ReimbursementItem {
+  id: string
+  seq: number
+  /** 费用类型：办公费用/业务招待费/住宿费... */
+  category?: string | null
+  /** 摘要 */
+  summary?: string | null
+  /** 金额（后端 Decimal 序列化为字符串，前端用 Number() 处理） */
+  amount: string
+  note?: string | null
+}
+
+/** 差旅专用：出差信息（一对一） */
+export interface ReimbursementTrip {
+  id: string
+  travelerName?: string | null
+  startDate?: string | null
+  endDate?: string | null
+  fromLocation?: string | null
+  toLocation?: string | null
+  headcount?: number | null
+  reason?: string | null
+  /** 原始「起止时间」文本，兜底展示 */
+  dateRangeText?: string | null
+  /** 原始「起止地点」文本，兜底展示 */
+  locationText?: string | null
+}
+
+/** 差旅专用：行程段（一对多） */
+export interface ReimbursementLeg {
+  id: string
+  /** 如 "7/8" */
+  legDate?: string | null
+  transport?: string | null
+  fromStation?: string | null
+  toStation?: string | null
+  amount: string
+  ticketCount?: number | null
+}
+
+/** 报销单（主表 + 关联子表） */
+export interface Reimbursement {
+  id: string
+  type: ReimbursementType
+  applicantName: string
+  department?: string | null
+  projectName?: string | null
+  projectCode?: string | null
+  /** 申请日期，ISO 字符串或 null */
+  applyDate?: string | null
+  /** 合计金额（系统按明细求和得出，string 原因为 Decimal 序列化） */
+  totalAmount: string
+  status: ReimbursementStatus
+  /** 原始文件相对路径，预览走 /api/reimbursements/:id/file */
+  storagePath?: string | null
+  fileName?: string | null
+  /** 提交人 User.id（本人才能提交/删除草稿） */
+  submitterId?: string | null
+  approverId?: string | null
+  approvedAt?: string | null
+  rejectReason?: string | null
+  createdAt: string
+  updatedAt: string
+  items: ReimbursementItem[]
+  trip?: ReimbursementTrip | null
+  legs?: ReimbursementLeg[]
+}

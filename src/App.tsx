@@ -10,6 +10,7 @@ import Accounts from '@/pages/Accounts'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
 import Invoices from '@/pages/Invoices'
+import Reimbursements from '@/pages/Reimbursements'
 import UserManagement from '@/pages/UserManagement'
 import ChangePassword from '@/pages/ChangePassword'
 import { useAppStore } from '@/store/useAppStore'
@@ -66,6 +67,7 @@ export default function App() {
                 <Route path="transactions" element={<Transactions />} />
                 <Route path="accounts" element={<Accounts />} />
                 <Route path="invoices" element={<Invoices />} />
+                <Route path="reimbursements" element={<Reimbursements />} />
                 <Route path="reports" element={<Reports />} />
                 <Route path="settings" element={<Settings />} />
                 {/* 用户管理：仅超级管理员可见（前端隐藏 + 后端强制校验） */}

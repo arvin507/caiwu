@@ -5,6 +5,7 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, InvoiceSortKey } from '@/types'
 import { formatDate } from '@/utils/format'
+import { openFilePreview } from '@/utils/openFilePreview'
 import UploadModal from './UploadModal'
 import InvoiceDetailDrawer from './InvoiceDetailDrawer'
 
@@ -18,6 +19,7 @@ export default function Invoices() {
   const invoices = useAppStore((s) => s.invoices)
   const loadInvoices = useAppStore((s) => s.loadInvoices)
   const deleteInvoice = useAppStore((s) => s.deleteInvoice)
+  const token = useAppStore((s) => s.token)
   const [sortKey, setSortKey] = useState<InvoiceSortKey>('uploadedAt')
   const [uploadOpen, setUploadOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -89,7 +91,15 @@ export default function Invoices() {
       key: 'preview',
       render: (_, row) =>
         row.id ? (
-          <a href={`/api/invoices/${row.id}/file`} target="_blank" rel="noreferrer">
+          <a
+            onClick={async () => {
+              try {
+                await openFilePreview(`/api/invoices/${row.id}/file`, token)
+              } catch (e) {
+                message.error(e instanceof Error ? e.message : '预览失败')
+              }
+            }}
+          >
             查看
           </a>
         ) : (

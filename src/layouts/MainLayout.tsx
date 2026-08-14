@@ -5,6 +5,7 @@ import {
   DashboardOutlined,
   FileTextOutlined,
   LogoutOutlined,
+  ReconciliationOutlined,
   SettingOutlined,
   SwapOutlined,
   TeamOutlined,
@@ -37,6 +38,7 @@ export default function MainLayout() {
     { key: '/transactions', icon: <SwapOutlined />, label: '账单明细' },
     { key: '/accounts', icon: <WalletOutlined />, label: '账户管理' },
     { key: '/invoices', icon: <FileTextOutlined />, label: '发票管理' },
+    { key: '/reimbursements', icon: <ReconciliationOutlined />, label: '报销管理' },
     { key: '/reports', icon: <BarChartOutlined />, label: '统计报表' },
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
     // 仅超级管理员可见：用户管理（普通用户不显示此项，且后端也会拒绝访问）

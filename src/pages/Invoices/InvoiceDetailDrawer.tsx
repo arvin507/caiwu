@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Alert, App, Button, Collapse, Drawer, Input, Space, Tag, Typography } from 'antd'
 import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, InvoiceParsedData } from '@/types'
+import { openFilePreview } from '@/utils/openFilePreview'
 
 /** 可手动核对的字段（不含 rawText，原文只读展示） */
 const FIELDS: { key: keyof InvoiceParsedData; label: string }[] = [
@@ -38,6 +39,7 @@ interface Props {
 export default function InvoiceDetailDrawer({ open, invoice, onClose }: Props) {
   const { message } = App.useApp()
   const updateInvoice = useAppStore((s) => s.updateInvoice)
+  const token = useAppStore((s) => s.token)
   const [fields, setFields] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
 
@@ -89,7 +91,15 @@ export default function InvoiceDetailDrawer({ open, invoice, onClose }: Props) {
         <>
           <Space size="middle" style={{ marginBottom: 16 }}>
             <StatusTag status={invoice.parseStatus} />
-            <a href={`/api/invoices/${invoice.id}/file`} target="_blank" rel="noreferrer">
+            <a
+              onClick={async () => {
+                try {
+                  await openFilePreview(`/api/invoices/${invoice.id}/file`, token)
+                } catch (e) {
+                  message.error(e instanceof Error ? e.message : '预览失败')
+                }
+              }}
+            >
               查看原始文件
             </a>
           </Space>
