@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getCurrentUser } from '@/lib/auth'
+import { isInvoiceOccupied } from '@/lib/reimbursementLink'
 
 export const runtime = 'nodejs'
 
@@ -70,16 +71,7 @@ export async function PATCH(
       select: { id: true },
     })
     if (!inv) return NextResponse.json({ error: '发票不存在' }, { status: 404 })
-
-    const dupItem = await prisma.reimbursementItem.findFirst({
-      where: { invoiceId, id: { not: lineId } },
-      select: { id: true },
-    })
-    const dupLeg = await prisma.reimbursementTripLeg.findFirst({
-      where: { invoiceId, id: { not: lineId } },
-      select: { id: true },
-    })
-    if (dupItem || dupLeg) {
+    if (await isInvoiceOccupied(prisma, invoiceId, lineId)) {
       return NextResponse.json({ error: '该发票已关联到其他报销明细' }, { status: 400 })
     }
   }

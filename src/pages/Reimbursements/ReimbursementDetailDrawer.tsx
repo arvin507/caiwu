@@ -13,7 +13,7 @@ import {
   Tag,
   Typography,
 } from 'antd'
-import { DollarOutlined, FileTextOutlined } from '@ant-design/icons'
+import { DollarOutlined, FileTextOutlined, LinkOutlined } from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
 import type {
   Reimbursement,
@@ -24,6 +24,7 @@ import type {
 import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
 import LinkInvoiceModal from './LinkInvoiceModal'
+import BatchLinkInvoiceModal from './BatchLinkInvoiceModal'
 
 const TYPE_LABEL: Record<string, string> = {
   travel: '差旅费',
@@ -91,6 +92,7 @@ export default function ReimbursementDetailDrawer({
 
   // 关联发票操作的状态
   const [linkOpen, setLinkOpen] = useState(false)
+  const [batchOpen, setBatchOpen] = useState(false)
   const [linkLine, setLinkLine] = useState<{
     type: 'item' | 'leg'
     id: string
@@ -326,10 +328,25 @@ export default function ReimbursementDetailDrawer({
           <Card
             size="small"
             title={
-              <Space>
-                <FileTextOutlined />
-                费用明细
-              </Space>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <Space>
+                  <FileTextOutlined />
+                  费用明细
+                </Space>
+                <Button
+                  size="small"
+                  icon={<LinkOutlined />}
+                  onClick={() => setBatchOpen(true)}
+                >
+                  批量关联发票
+                </Button>
+              </div>
             }
             styles={{ body: { padding: 0 } }}
           >
@@ -465,6 +482,18 @@ export default function ReimbursementDetailDrawer({
         lineType={linkLine?.type ?? 'item'}
         lineId={linkLine?.id ?? ''}
         onClose={() => setLinkOpen(false)}
+        onLinked={(updated) => {
+          setReb(updated)
+          onChanged()
+        }}
+      />
+
+      <BatchLinkInvoiceModal
+        open={batchOpen}
+        reimbursementId={reb?.id ?? ''}
+        applicantName={reb?.applicantName ?? ''}
+        reimbursement={reb as Reimbursement}
+        onClose={() => setBatchOpen(false)}
         onLinked={(updated) => {
           setReb(updated)
           onChanged()
