@@ -13,3 +13,6 @@ uploads
 
 # 日志
 *.log
+
+# 增量编译缓存（运行时生成，不入库）
+*.tsbuildinfo

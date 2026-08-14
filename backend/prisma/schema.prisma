@@ -42,3 +42,83 @@ model User {
 
   @@map("users")
 }
+
+/// 报销单主表：差旅费(travel) 与一般费用(general) 共用
+/// 两类单的「共有骨架」(申请人/部门/总额/状态/附件/审批人) 放这里，
+/// 差异部分拆到 ReimbursementItem(通用明细) / ReimbursementTrip+Leg(仅差旅)
+/// 文件本身落盘到 backend/uploads/，数据库只存路径
+model Reimbursement {
+  id            String   @id @default(cuid())
+  type          String // 'travel' | 'general'
+  applicantName String // 申请人姓名（解析自 Excel）
+  department    String? // 部门
+  projectName   String? // 项目名称
+  projectCode   String? // 项目编号
+  applyDate     DateTime? // 申请日期（解析自 Excel，可能为 null）
+  totalAmount   Decimal  @db.Decimal(10, 2) @default(0) // 由明细求和得出，不信任手写大写
+  totalAmountText String? // 大写金额，仅展示
+  status        String   @default("draft") // draft→submitted→approved/rejected→paid
+  storagePath   String? // 原始 xlsx 落盘路径
+  fileName      String? // 原始文件名
+  submitterId   String? // 谁上传的（User.id）
+  approverId    String? // 谁审批的（User.id）
+  approvedAt    DateTime?
+  rejectReason  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  items ReimbursementItem[]
+  trip  ReimbursementTrip?
+  legs  ReimbursementTripLeg[]
+
+  @@index([submitterId])
+  @@index([status])
+  @@map("reimbursements")
+}
+
+/// 通用费用明细：一般费用直接用；差旅的「费用汇总段」也复用它
+model ReimbursementItem {
+  id              String  @id @default(cuid())
+  reimbursementId String
+  seq             Int // 序号
+  category        String? // 费用类型：办公费用/业务招待费/住宿费/伙食补助费...
+  summary         String? // 摘要
+  amount          Decimal @db.Decimal(10, 2)
+  note            String?
+  reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+
+  @@map("reimbursement_items")
+}
+
+/// 差旅专用：出差信息（一对一）
+model ReimbursementTrip {
+  id              String  @id @default(cuid())
+  reimbursementId String  @unique
+  travelerName    String? // 出差人员
+  startDate       DateTime?
+  endDate         DateTime?
+  fromLocation    String? // 出发地
+  toLocation      String? // 目的地（可能多个，用 、 连接）
+  headcount       Int? // 出差人数
+  reason          String? // 出差事由
+  dateRangeText   String? // 原始「起止时间」文本
+  locationText    String? // 原始「起止地点」文本
+  reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+
+  @@map("reimbursement_trips")
+}
+
+/// 差旅专用：行程段（一对多，每段一行）
+model ReimbursementTripLeg {
+  id              String  @id @default(cuid())
+  reimbursementId String
+  legDate         String? // 如 "7/8"（解析自 Excel，保留原始文本）
+  transport       String? // 高铁/飞机...
+  fromStation     String?
+  toStation       String?
+  amount          Decimal @db.Decimal(10, 2) // 金额小计（单值）
+  ticketCount     Int? // 单据张数
+  reimbursement   Reimbursement @relation(fields: [reimbursementId], references: [id], onDelete: Cascade)
+
+  @@map("reimbursement_trip_legs")
+}
