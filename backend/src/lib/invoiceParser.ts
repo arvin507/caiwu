@@ -1,17 +1,18 @@
-// 发票解析：统一走百度 OCR（增值税发票识别），支持图片 / PDF / OFD
+// 发票解析：统一走本地离线 OCR 引擎（脚本见 backend/local_ocr.py）
 //
-// 说明：此前本地文本解析（pdf-parse / OFD 解包）对版式敏感、易抽错金额
-// （曾出现「金额/税额为空、价税合计被错抽成税额」的 bug），故改为全部交由
-// 百度云端结构化识别，入参按文件类型选择 image / pdf_file / ofd_file。
-// 百度 vat_invoice 接口原生支持这三种 base64 入参（无需本地转图片）。
+// 引擎：local_ocr.py 默认优先用 PaddleOCR（PaddlePaddle，中文识别准确率高，
+// 解决此前 RapidOCR 在中文发票上乱码/误识的问题）；PaddleOCR 不可用时自动回退
+// RapidOCR（rapidocr-onnxruntime）。PDF 用 PyMuPDF 栅格化后识别。
 //
-// 数据合规提示：发票属财务敏感数据，调用意味着文件会发往百度云端；
-// 学习/内部可用，上线前请评估合规（或改用私有化部署 / 本地 OCR）。
-import { readFile } from 'fs/promises'
-import path from 'path'
-import { baiduVatOcr } from './baiduOcr'
-
-const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp']
+// 背景：此前曾用百度云端 vat_invoice，但发票属财务敏感数据会上云；本地离线引擎
+// 完全不依赖云端、不暴露文件，离线免费。
+//
+// 支持：图片（png/jpg/jpeg/bmp/gif/webp）、PDF（多页合并坐标）。
+// 不支持（实测 PyMuPDF 1.28.2 无法打开 OFD）：OFD —— 需要额外引入 OFD 渲染库
+//        后再扩展 local_ocr.py，届时前端放宽文件类型限制即可。
+//
+// 数据流：parseInvoice(filePath) → spawn python local_ocr.py → 解析 stdout JSON → ParsedInvoice
+import { localOcr } from './localOcr'
 
 export interface ParsedInvoice {
   invoiceCode?: string | null
@@ -28,17 +29,5 @@ export interface ParsedInvoice {
 }
 
 export async function parseInvoice(filePath: string): Promise<ParsedInvoice> {
-  const ext = path.extname(filePath).toLowerCase()
-  const base64 = (await readFile(filePath)).toString('base64')
-
-  if (IMAGE_EXTS.includes(ext)) {
-    return baiduVatOcr(base64, 'image')
-  }
-  if (ext === '.pdf') {
-    return baiduVatOcr(base64, 'pdf')
-  }
-  if (ext === '.ofd') {
-    return baiduVatOcr(base64, 'ofd')
-  }
-  throw new Error(`暂不支持的文件类型「${ext}」（当前仅支持图片 / PDF / OFD，均走百度 OCR）`)
+  return localOcr(filePath)
 }

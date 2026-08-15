@@ -19,11 +19,11 @@ model Invoice {
   fileType    String // MIME 类型，如 image/png、application/pdf
   invoiceDate DateTime // 发票日期（用户填写）
   uploadedAt  DateTime @default(now()) // 上传时间（系统记录）
-  note        String? // 备注（可选）
+  note        String? @db.Text // 备注（可选，自由文本，用 Text 避免 varchar 截断）
   storagePath String // 落盘后的相对路径，如 /uploads/inv-xxx.pdf
   parseStatus String   @default("pending") // 解析状态：pending | done | failed
   parsedData  Json?                     // 本地解析（PDF/OFD）出的结构化字段
-  parseError  String?                   // 解析失败时的错误信息
+  parseError  String? @db.Text          // 解析失败时的错误信息（自由文本，用 Text 避免 P2000 截断）
   invoiceNumber String?                 // 解析出的发票号码（独立列，用于去重/查询，避免 JSON path 在 MySQL 下报错）
   fileHash     String?                 // 文件内容 sha256，用于幂等去重（同一文件重复上传只更新不新建）
 
