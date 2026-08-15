@@ -16,3 +16,9 @@ uploads
 
 # 增量编译缓存（运行时生成，不入库）
 *.tsbuildinfo
+
+# Next.js 构建/开发产物（distDir 指向的目录，运行时生成，禁止入库）
+.next
+.next_dev/
+.next_run/
+.next_run2/

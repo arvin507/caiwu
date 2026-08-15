@@ -35,12 +35,9 @@ export async function DELETE(
   }
 
   await prisma.invoice.delete({ where: { id } })
-  try {
-    await unlink(path.join(UPLOAD_DIR, path.basename(inv.storagePath)))
-  } catch (e) {
-    // 元数据已删；文件删除失败仅记录，不阻断响应（如文件已手动移除）
-    console.error('[DELETE] 删除落盘文件失败:', e)
-  }
+  // 落盘文件删除改为后台尽力、不阻塞响应（开发环境 safe-delete 可能拦截 unlink，
+  // 放行 uploads 目录后即为正常删除；即便被拦也只是磁盘残留，不影响元数据删除）
+  void unlink(path.join(UPLOAD_DIR, path.basename(inv.storagePath))).catch(() => {})
   return NextResponse.json({ ok: true })
 }
 

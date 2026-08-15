@@ -57,6 +57,7 @@ export default function Invoices() {
   const [detailOpen, setDetailOpen] = useState(false)
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [batchDeleting, setBatchDeleting] = useState(false)
   // 多选批量删除：当前选中的行 id
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
 
@@ -82,6 +83,7 @@ export default function Invoices() {
   // 批量删除：调 store.deleteInvoices（后端已关联报销单的会跳过）
   const handleBatchDelete = async () => {
     if (selectedRowKeys.length === 0) return
+    setBatchDeleting(true)
     try {
       const { deleted, skipped } = await deleteInvoices(selectedRowKeys)
       if (skipped.length > 0) {
@@ -94,6 +96,8 @@ export default function Invoices() {
       setSelectedRowKeys([])
     } catch (e) {
       message.error(e instanceof Error ? e.message : '批量删除失败')
+    } finally {
+      setBatchDeleting(false)
     }
   }
 
@@ -353,7 +357,7 @@ export default function Invoices() {
             okButtonProps={{ danger: true }}
             onConfirm={handleBatchDelete}
           >
-            <Button danger icon={<DeleteOutlined />}>
+            <Button danger icon={<DeleteOutlined />} loading={batchDeleting}>
               批量删除
             </Button>
           </Popconfirm>
