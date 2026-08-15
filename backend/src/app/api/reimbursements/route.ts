@@ -11,11 +11,21 @@ const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
 
 // GET /api/reimbursements —— 报销单列表
 // admin 看全部；普通用户只看自己提交的。默认倒序。
+// 支持 ?month=YYYY-MM 按月筛选（按「提交日期」= createdAt，非发票开票日）。
+// month 以「北京时间(东八区)」自然月边界计算，避免服务端时区漂移导致跨月边界错位。
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser(req)
   if (!user) return NextResponse.json({ error: '未登录' }, { status: 401 })
 
-  const where = user.role === 'admin' ? {} : { submitterId: user.id }
+  const month = req.nextUrl.searchParams.get('month')?.trim() || ''
+  const where: Record<string, unknown> = user.role === 'admin' ? {} : { submitterId: user.id }
+  if (/^\d{4}-\d{2}$/.test(month)) {
+    const [y, m] = month.split('-').map(Number)
+    // 东八区当月起止（UTC 时刻）
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0) - 8 * 3600 * 1000)
+    const end = new Date(Date.UTC(y, m, 1, 0, 0, 0) - 8 * 3600 * 1000)
+    ;(where as Record<string, unknown>).createdAt = { gte: start, lt: end }
+  }
   const list = await prisma.reimbursement.findMany({
     where,
     orderBy: { createdAt: 'desc' },

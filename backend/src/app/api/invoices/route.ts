@@ -42,8 +42,20 @@ async function splitPdfToPages(srcAbsPath: string): Promise<string[]> {
 }
 
 // GET /api/invoices —— 发票列表（按上传时间倒序）
-export async function GET() {
+// 支持 ?month=YYYY-MM 按月筛选（按「提交日期」= uploadedAt 上传时间，非发票开票日 invoiceDate）。
+// month 以「北京时间(东八区)」自然月边界计算，避免服务端时区漂移导致跨月边界错位。
+export async function GET(req: NextRequest) {
+  const month = req.nextUrl.searchParams.get('month')?.trim() || ''
+  const where: Record<string, unknown> = {}
+  if (/^\d{4}-\d{2}$/.test(month)) {
+    const [y, m] = month.split('-').map(Number)
+    // 东八区当月起止（UTC 时刻）
+    const start = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0) - 8 * 3600 * 1000)
+    const end = new Date(Date.UTC(y, m, 1, 0, 0, 0) - 8 * 3600 * 1000)
+    where.uploadedAt = { gte: start, lt: end }
+  }
   const invoices = await prisma.invoice.findMany({
+    where,
     orderBy: { uploadedAt: 'desc' },
     include: {
       links: {

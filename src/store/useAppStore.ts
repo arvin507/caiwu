@@ -46,7 +46,7 @@ interface AppState {
   // ---- 操作（actions） ----
   setPreferences: (patch: Partial<AppPreferences>) => void
   addTransaction: (input: Omit<Transaction, 'id'>) => void
-  loadInvoices: () => Promise<void>
+  loadInvoices: (month?: string | null) => Promise<void>
   /** 批量上传发票：同一归属人/日期/备注下，可一次传多张文件。
    *  返回 created（新建）、updated（同一文件/发票号已存在，幂等更新）、skipped（已关联报销单被跳过）。 */
   addInvoices: (input: {
@@ -118,9 +118,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 
   // 从后端服务拉取发票列表（发票页挂载时调用）
-  loadInvoices: async () => {
+  // month?: 'YYYY-MM' 按月筛选（按提交日期 uploadedAt，非开票日）；传 null/空则取全部
+  loadInvoices: async (month?: string | null) => {
     try {
-      const res = await fetch('/api/invoices')
+      const qs = month ? `?month=${encodeURIComponent(month)}` : ''
+      const res = await fetch(`/api/invoices${qs}`)
       if (!res.ok) return
       const list = (await res.json()) as Invoice[]
       set({ invoices: list })

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Empty, message, Popconfirm, Segmented, Space, Table, Tag, Typography } from 'antd'
+import { Button, DatePicker, Empty, message, Popconfirm, Segmented, Space, Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, InvoiceSortKey } from '@/types'
 import { formatDate } from '@/utils/format'
+import dayjs from 'dayjs'
 import { openFilePreview } from '@/utils/openFilePreview'
 import UploadModal from './UploadModal'
 import InvoiceDetailDrawer from './InvoiceDetailDrawer'
@@ -53,6 +54,7 @@ export default function Invoices() {
   const deleteInvoices = useAppStore((s) => s.deleteInvoices)
   const token = useAppStore((s) => s.token)
   const [sortKey, setSortKey] = useState<InvoiceSortKey>('uploadedAt')
+  const [month, setMonth] = useState<string | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
   const [activeInvoice, setActiveInvoice] = useState<Invoice | null>(null)
@@ -101,10 +103,10 @@ export default function Invoices() {
     }
   }
 
-  // 进入页面时从后端拉取发票列表
+  // 进入页面时从后端拉取发票列表（带当前月份筛选）
   useEffect(() => {
-    loadInvoices()
-  }, [loadInvoices])
+    loadInvoices(month)
+  }, [loadInvoices, month])
 
   // 自动轮询：只要还有「解析中」的发票，每 2.5s 刷新一次列表。
   // 工程目前没有 WebSocket/SSE，用轮询模拟「响应式」——用户无需手动刷新，
@@ -113,10 +115,10 @@ export default function Invoices() {
   useEffect(() => {
     if (!hasPending) return
     const timer = setInterval(() => {
-      loadInvoices()
+      loadInvoices(month)
     }, 2500)
     return () => clearInterval(timer)
-  }, [hasPending, loadInvoices])
+  }, [hasPending, loadInvoices, month])
 
   // 排序：所选字段值大的排前面（最新上传 / 最晚发票日期），降序
   const rows: Row[] = useMemo(() => {
@@ -258,6 +260,13 @@ export default function Invoices() {
           发票管理
         </Typography.Title>
         <Space>
+          <DatePicker
+            picker="month"
+            placeholder="按提交月份筛选"
+            value={month ? dayjs(month) : null}
+            onChange={(d) => setMonth(d ? d.format('YYYY-MM') : null)}
+            allowClear
+          />
           <Segmented
             value={sortKey}
             onChange={(v) => setSortKey(v as InvoiceSortKey)}

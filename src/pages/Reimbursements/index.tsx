@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Col,
+  DatePicker,
   Empty,
   Popconfirm,
   Row,
@@ -31,6 +32,7 @@ import type {
   ReimbursementType,
 } from '@/types'
 import { formatDate } from '@/utils/format'
+import dayjs from 'dayjs'
 import { openFilePreview } from '@/utils/openFilePreview'
 import UploadModal from './UploadModal'
 import LinkInvoiceModal from './LinkInvoiceModal'
@@ -71,6 +73,7 @@ export default function Reimbursements() {
 
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
+  const [month, setMonth] = useState<string | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
   const [active, setActive] = useState<Reimbursement | null>(null)
@@ -93,21 +96,25 @@ export default function Reimbursements() {
     [token],
   )
 
-  const load = useCallback(async (): Promise<Reimbursement[]> => {
-    setLoading(true)
-    try {
-      const res = await authFetch('/api/reimbursements')
-      if (!res.ok) return []
-      const data = (await res.json()) as Reimbursement[]
-      setRows(data.map((r) => ({ ...r, key: r.id })))
-      return data
-    } catch {
-      // 后端未启动：静默，列表保持空（空状态会引导启动服务）
-      return []
-    } finally {
-      setLoading(false)
-    }
-  }, [authFetch])
+  const load = useCallback(
+    async (month?: string | null): Promise<Reimbursement[]> => {
+      setLoading(true)
+      try {
+        const qs = month ? `?month=${encodeURIComponent(month)}` : ''
+        const res = await authFetch(`/api/reimbursements${qs}`)
+        if (!res.ok) return []
+        const data = (await res.json()) as Reimbursement[]
+        setRows(data.map((r) => ({ ...r, key: r.id })))
+        return data
+      } catch {
+        // 后端未启动：静默，列表保持空（空状态会引导启动服务）
+        return []
+      } finally {
+        setLoading(false)
+      }
+    },
+    [authFetch],
+  )
 
   const openDetail = (reb: Reimbursement) => {
     setActive(reb)
@@ -117,13 +124,18 @@ export default function Reimbursements() {
   // 详情里删除/状态变更后：刷新列表，并把抽屉当前条目同步为最新数据
   // （否则提交/审批后按钮还会停留旧状态）
   const handleChanged = useCallback(async () => {
-    const data = await load()
+    const data = await load(month)
     const id = activeRef.current?.id
     if (id) {
       const updated = data.find((r) => r.id === id)
       if (updated) setActive(updated)
     }
-  }, [load])
+  }, [load, month])
+
+  // 进入页面 / 切换月份筛选时拉取列表
+  useEffect(() => {
+    load(month)
+  }, [load, month])
 
   // 关联发票后：用后端返回的最新整单就地替换对应行（展开区立即反映发票状态）
   const applyUpdated = useCallback((updated: Reimbursement) => {
@@ -163,8 +175,8 @@ export default function Reimbursements() {
   }
 
   useEffect(() => {
-    load()
-  }, [load])
+    load(month)
+  }, [load, month])
 
   // 批量删除：调 DELETE /api/reimbursements（body { ids }）
   const handleBatchDelete = async () => {
@@ -189,7 +201,7 @@ export default function Reimbursements() {
         msg.success(`已删除 ${deletedCount} 张报销单`)
       }
       setSelectedRowKeys([])
-      load()
+      load(month)
     } catch (e) {
       msg.error(e instanceof Error ? e.message : '批量删除失败')
     }
@@ -204,7 +216,7 @@ export default function Reimbursements() {
       }
       msg.success('已删除')
       if (active?.id === id) setDetailOpen(false)
-      load()
+      load(month)
     } catch (e) {
       msg.error(e instanceof Error ? e.message : '删除失败')
     }
@@ -521,9 +533,18 @@ export default function Reimbursements() {
             上传报销单 Excel，系统自动解析并核对，关联发票后提交审批。
           </Typography.Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setUploadOpen(true)}>
-          上传报销单
-        </Button>
+        <Space>
+          <DatePicker
+            picker="month"
+            placeholder="按月筛选(提交日期)"
+            value={month ? dayjs(month) : null}
+            onChange={(d) => setMonth(d ? d.format('YYYY-MM') : null)}
+            allowClear
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setUploadOpen(true)}>
+            上传报销单
+          </Button>
+        </Space>
       </div>
 
       {/* 状态统计卡片 */}
