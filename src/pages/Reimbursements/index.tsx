@@ -36,6 +36,7 @@ import dayjs from 'dayjs'
 import { openFilePreview } from '@/utils/openFilePreview'
 import UploadModal from './UploadModal'
 import LinkInvoiceModal from './LinkInvoiceModal'
+import UploadAndLinkModal from './UploadAndLinkModal'
 import ReimbursementDetailDrawer from './ReimbursementDetailDrawer'
 
 const TYPE_LABEL: Record<ReimbursementType, string> = {
@@ -156,6 +157,14 @@ export default function Reimbursements() {
     invoiceId?: string | null
   } | null>(null)
 
+  // 上传并自动关联弹窗状态（同样必须带 rebId，避免跨报销单串单）
+  const [uploadLine, setUploadLine] = useState<{
+    type: 'item' | 'leg'
+    id: string
+    rebId: string
+    applicantName: string
+  } | null>(null)
+
   const openLink = (
     type: 'item' | 'leg',
     id: string,
@@ -165,6 +174,60 @@ export default function Reimbursements() {
     setLinkLine({ type, id, rebId, applicantName })
     setLinkOpen(true)
   }
+  const openUpload = (
+    type: 'item' | 'leg',
+    id: string,
+    rebId: string,
+    applicantName: string,
+  ) => {
+    setUploadLine({ type, id, rebId, applicantName })
+    setUploadOpen(true)
+  }
+
+  // 解除某张发票与行的关联（列表展开行用：单张发票旁的「解除」）
+  const handleUnlink = async (type: 'item' | 'leg', lineId: string, invoiceId: string, rebId: string) => {
+    try {
+      const res = await authFetch(`/api/reimbursements/${rebId}/link`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lineType: type, lineId, invoiceId }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || '解除失败')
+      }
+      const updated = (await res.json()) as Reimbursement
+      msg.success('已解除关联')
+      // 就地替换该报销单行，展开区立即反映
+      setRows((prev) => prev.map((r) => (r.id === updated.id ? { ...updated, key: updated.id } : r)))
+    } catch (e) {
+      msg.error(e instanceof Error ? e.message : '解除失败')
+    }
+  }
+
+  // 解除本行所有发票关联（行级「解除全部」）
+  const handleUnlinkAll = async (type: 'item' | 'leg', lineId: string, links: { invoiceId: string }[], rebId: string) => {
+    try {
+      let latest: Reimbursement | null = null
+      for (const l of links) {
+        const res = await authFetch(`/api/reimbursements/${rebId}/link`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lineType: type, lineId, invoiceId: l.invoiceId }),
+        })
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string }
+          throw new Error(err.error || '解除失败')
+        }
+        latest = (await res.json()) as Reimbursement
+      }
+      msg.success('已解除本行所有关联')
+      if (latest) setRows((prev) => prev.map((r) => (r.id === latest!.id ? { ...latest!, key: latest!.id } : r)))
+    } catch (e) {
+      msg.error(e instanceof Error ? e.message : '解除失败')
+    }
+  }
+
 
   const previewInvoice = async (invoiceId: string) => {
     try {
@@ -382,8 +445,19 @@ export default function Reimbursements() {
                 <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
                   查看
                 </Button>
+                <Popconfirm
+                  title="解除该发票与本行的关联？"
+                  onConfirm={() => handleUnlink(type, line.id, l.invoiceId, rebId)}
+                >
+                  <Button type="link" size="small" danger>
+                    解除
+                  </Button>
+                </Popconfirm>
               </>
             ) : null}
+            <Button type="link" size="small" onClick={() => openUpload(type, line.id, rebId, applicantName)}>
+              上传发票
+            </Button>
             <Button type="link" size="small" onClick={() => openLink(type, line.id, rebId, applicantName)}>
               关联
             </Button>
@@ -423,9 +497,22 @@ export default function Reimbursements() {
             </Space>
           </div>
         ))}
-        <Button type="link" size="small" style={{ paddingLeft: 0 }} onClick={() => openLink(type, line.id, rebId, applicantName)}>
-          关联
-        </Button>
+        <Space size="small" wrap align="center" style={{ paddingLeft: 0 }}>
+          <Button type="link" size="small" style={{ paddingLeft: 0 }} onClick={() => openUpload(type, line.id, rebId, applicantName)}>
+            上传发票
+          </Button>
+          <Button type="link" size="small" onClick={() => openLink(type, line.id, rebId, applicantName)}>
+            关联
+          </Button>
+          <Popconfirm
+            title={`解除本行全部 ${links.length} 张发票关联？`}
+            onConfirm={() => handleUnlinkAll(type, line.id, links, rebId)}
+          >
+            <Button type="link" size="small" danger>
+              解除全部
+            </Button>
+          </Popconfirm>
+        </Space>
         {renderShortfall()}
       </div>
     )
@@ -679,6 +766,19 @@ export default function Reimbursements() {
         onLinked={(updated) => {
           applyUpdated(updated)
           setLinkOpen(false)
+        }}
+      />
+
+      <UploadAndLinkModal
+        open={uploadOpen}
+        reimbursementId={uploadLine?.rebId ?? ''}
+        applicantName={uploadLine?.applicantName ?? ''}
+        lineType={uploadLine?.type ?? 'item'}
+        lineId={uploadLine?.id ?? ''}
+        onClose={() => setUploadOpen(false)}
+        onLinked={(updated) => {
+          applyUpdated(updated)
+          setUploadOpen(false)
         }}
       />
     </div>

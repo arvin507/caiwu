@@ -26,6 +26,7 @@ import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
 import LinkInvoiceModal from './LinkInvoiceModal'
 import BatchLinkInvoiceModal from './BatchLinkInvoiceModal'
+import UploadAndLinkModal from './UploadAndLinkModal'
 
 const TYPE_LABEL: Record<string, string> = {
   travel: '差旅费',
@@ -94,15 +95,51 @@ export default function ReimbursementDetailDrawer({
   // 关联发票操作的状态
   const [linkOpen, setLinkOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [linkLine, setLinkLine] = useState<{
     type: 'item' | 'leg'
     id: string
     invoiceId?: string | null
   } | null>(null)
+  const [uploadLine, setUploadLine] = useState<{
+    type: 'item' | 'leg'
+    id: string
+  } | null>(null)
 
   const openLink = (type: 'item' | 'leg', id: string) => {
     setLinkLine({ type, id })
     setLinkOpen(true)
+  }
+  const openUpload = (type: 'item' | 'leg', id: string) => {
+    setUploadLine({ type, id })
+    setUploadOpen(true)
+  }
+
+  // 解除本行所有发票关联（逐张 DELETE /link，取最后一次响应里的整单）
+  const handleUnlinkAll = async (type: 'item' | 'leg', lineId: string, links: InvoiceLink[]) => {
+    try {
+      let latest: Reimbursement | null = null
+      for (const l of links) {
+        const res = await fetch(`/api/reimbursements/${reb?.id}/link`, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ lineType: type, lineId, invoiceId: l.invoiceId }),
+        })
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string }
+          throw new Error(err.error || '解除失败')
+        }
+        latest = (await res.json()) as Reimbursement
+      }
+      message.success('已解除本行所有关联')
+      if (latest) setReb(latest)
+      onChanged()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '解除失败')
+    }
   }
 
   // 解除某张发票与当前行的关联（仅删对应 InvoiceLink，不影响该发票的其它关联）
@@ -226,6 +263,9 @@ export default function ReimbursementDetailDrawer({
                 </Popconfirm>
               </>
             ) : null}
+            <Button type="link" size="small" onClick={() => openUpload(type, line.id)}>
+              上传发票
+            </Button>
             <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
               关联
             </Button>
@@ -273,9 +313,22 @@ export default function ReimbursementDetailDrawer({
             </Space>
           </div>
         ))}
-        <Button type="link" size="small" style={{ paddingLeft: 0 }} onClick={() => openLink(type, line.id)}>
-          关联
-        </Button>
+        <Space size="small" wrap align="center" style={{ paddingLeft: 0 }}>
+          <Button type="link" size="small" style={{ paddingLeft: 0 }} onClick={() => openUpload(type, line.id)}>
+            上传发票
+          </Button>
+          <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
+            关联
+          </Button>
+          <Popconfirm
+            title={`解除本行全部 ${links.length} 张发票关联？`}
+            onConfirm={() => handleUnlinkAll(type, line.id, links)}
+          >
+            <Button type="link" size="small" danger>
+              解除全部
+            </Button>
+          </Popconfirm>
+        </Space>
         <ShortfallHint lineAmount={Number(line.amount)} links={links} />
       </div>
     )
@@ -658,6 +711,19 @@ export default function ReimbursementDetailDrawer({
         applicantName={reb?.applicantName ?? ''}
         reimbursement={reb as Reimbursement}
         onClose={() => setBatchOpen(false)}
+        onLinked={(updated) => {
+          setReb(updated)
+          onChanged()
+        }}
+      />
+
+      <UploadAndLinkModal
+        open={uploadOpen}
+        reimbursementId={reb?.id ?? ''}
+        applicantName={reb?.applicantName ?? ''}
+        lineType={uploadLine?.type ?? 'item'}
+        lineId={uploadLine?.id ?? ''}
+        onClose={() => setUploadOpen(false)}
         onLinked={(updated) => {
           setReb(updated)
           onChanged()
