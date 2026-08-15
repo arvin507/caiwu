@@ -146,7 +146,10 @@ export default function ReimbursementDetailDrawer({
       {(line.links ?? []).map((l) => (
         <Space size="small" key={l.id} wrap>
           <Tag color="success">
-            {l.invoice?.invoiceNumber || l.invoice?.fileName || '发票'}
+            {l.invoice?.invoiceType === 'train'
+              ? `${l.invoice?.parsedData?.departureStation ?? ''}→${l.invoice?.parsedData?.arrivalStation ?? ''} ${l.invoice?.parsedData?.trainNo ?? ''}`.trim() ||
+                (l.invoice?.invoiceNumber || l.invoice?.fileName || '火车票')
+              : (l.invoice?.invoiceNumber || l.invoice?.fileName || '发票')}
             {l.allocatedAmount ? ` 分摊¥${l.allocatedAmount}` : ''}
           </Tag>
           <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>

@@ -25,6 +25,8 @@ export interface ParsedInvoice {
   totalAmount?: string | null
   /** 销售方纳税人识别号（公司类发票才有，个人发票无） */
   sellerTaxId?: string | null
+  /** 发票类型：vat(增值税) | train(铁路电子客票) */
+  invoiceType?: 'vat' | 'train'
   rawText: string
 }
 

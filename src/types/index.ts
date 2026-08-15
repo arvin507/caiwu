@@ -97,6 +97,8 @@ export interface Invoice {
   parsedData?: InvoiceParsedData | null
   /** 解析失败原因 */
   parseError?: string | null
+  /** 发票类型：vat(增值税普/专票) | train(铁路电子客票/火车票) */
+  invoiceType?: 'vat' | 'train' | string
   /** 解析出的发票号码（独立列；用于前端展示与去重提示，避免依赖 JSON 字段） */
   invoiceNumber?: string | null
   /** 关联发票专用：标注该发票当前已关联到哪些报销行（支持 N:1，故为数组；来自 /api/invoices/linkable） */
@@ -130,6 +132,33 @@ export interface InvoiceParsedData {
   sellerTaxId?: string | null
   /** 抽取出的原始文字，用于人工核对 */
   rawText?: string
+  // ── 火车票（铁路电子客票）扩展字段 ──
+  /** 乘车人姓名 */
+  passengerName?: string | null
+  /** 出发站 */
+  departureStation?: string | null
+  /** 到达站 */
+  arrivalStation?: string | null
+  /** 车次，如 G7608 */
+  trainNo?: string | null
+  /** 乘车日期 ISO（yyyy-mm-dd） */
+  rideDate?: string | null
+  /** 开车时间 HH:mm */
+  departureTime?: string | null
+  /** 乘车日期+时间，ISO 片段 */
+  departureDateTime?: string | null
+  /** 车厢/座位，如 04车13C号 */
+  carSeatNo?: string | null
+  /** 席别，如 二等座 */
+  seatClass?: string | null
+  /** 票价（= totalAmount，未拆分税额） */
+  fare?: string | null
+  /** 电子客票号 */
+  electronicTicketNo?: string | null
+  /** 身份证号（可能遮挡） */
+  idNo?: string | null
+  /** 改签/退票标记 */
+  ticketNote?: string | null
   /** 兜底：保留其它未被上面字段覆盖的键 */
   [key: string]: unknown
 }

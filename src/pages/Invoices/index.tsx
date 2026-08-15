@@ -12,7 +12,7 @@ import InvoiceDetailDrawer from './InvoiceDetailDrawer'
 type Row = Invoice & { key: string }
 
 /** 解析明细字段（与核对抽屉一致，用于列表展开行展示） */
-const DETAIL_FIELDS: { key: string; label: string }[] = [
+const VAT_DETAIL_FIELDS: { key: string; label: string }[] = [
   { key: 'invoiceCode', label: '发票代码' },
   { key: 'invoiceNumber', label: '发票号码' },
   { key: 'invoiceDate', label: '开票日期' },
@@ -22,6 +22,23 @@ const DETAIL_FIELDS: { key: string; label: string }[] = [
   { key: 'amount', label: '金额' },
   { key: 'taxAmount', label: '税额' },
   { key: 'totalAmount', label: '价税合计' },
+]
+/** 火车票展开行字段（与核对抽屉一致） */
+const TRAIN_DETAIL_FIELDS: { key: string; label: string }[] = [
+  { key: 'invoiceNumber', label: '发票号码' },
+  { key: 'invoiceDate', label: '开票日期' },
+  { key: 'passengerName', label: '乘车人' },
+  { key: 'departureStation', label: '出发站' },
+  { key: 'arrivalStation', label: '到达站' },
+  { key: 'trainNo', label: '车次' },
+  { key: 'departureDateTime', label: '乘车日期/时间' },
+  { key: 'carSeatNo', label: '车厢/座位' },
+  { key: 'seatClass', label: '席别' },
+  { key: 'totalAmount', label: '票价' },
+  { key: 'buyerName', label: '购买方名称' },
+  { key: 'electronicTicketNo', label: '电子客票号' },
+  { key: 'idNo', label: '身份证号' },
+  { key: 'ticketNote', label: '改签/退票' },
 ]
 const MONEY_KEYS = new Set(['amount', 'taxAmount', 'totalAmount'])
 
@@ -167,13 +184,20 @@ export default function Invoices() {
         row.parsedData?.invoiceNumber ?? <Typography.Text type="secondary">—</Typography.Text>,
     },
     {
-      title: '销售方',
+      title: '销售方/行程',
       key: 'pSeller',
       render: (_, row) =>
-        row.parsedData?.sellerName ?? <Typography.Text type="secondary">—</Typography.Text>,
+        row.invoiceType === 'train' ? (
+          <span>
+            {row.parsedData?.departureStation ?? '—'} → {row.parsedData?.arrivalStation ?? '—'}
+            {row.parsedData?.trainNo ? ` ${row.parsedData.trainNo}` : ''}
+          </span>
+        ) : (
+          (row.parsedData?.sellerName ?? <Typography.Text type="secondary">—</Typography.Text>)
+        ),
     },
     {
-      title: '价税合计',
+      title: '价税合计/票价',
       key: 'pTotal',
       render: (_, row) => {
         const v = row.parsedData?.totalAmount
@@ -265,6 +289,8 @@ export default function Invoices() {
               if (!pd) {
                 return <Typography.Text type="secondary">暂无解析明细</Typography.Text>
               }
+              const detailFields =
+                row.invoiceType === 'train' ? TRAIN_DETAIL_FIELDS : VAT_DETAIL_FIELDS
               return (
                 <div
                   style={{
@@ -274,7 +300,7 @@ export default function Invoices() {
                     padding: '4px 8px',
                   }}
                 >
-                  {DETAIL_FIELDS.map((f) => {
+                  {detailFields.map((f) => {
                     const v = pd[f.key]
                     return (
                       <div key={f.key}>

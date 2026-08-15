@@ -22,6 +22,7 @@ model Invoice {
   note        String? @db.Text // 备注（可选，自由文本，用 Text 避免 varchar 截断）
   storagePath String // 落盘后的相对路径，如 /uploads/inv-xxx.pdf
   parseStatus String   @default("pending") // 解析状态：pending | done | failed
+  invoiceType String   @default("vat")  // 发票类型：vat(增值税普/专票) | train(铁路电子客票/火车票)
   parsedData  Json?                     // 本地解析（PDF/OFD）出的结构化字段
   parseError  String? @db.Text          // 解析失败时的错误信息（自由文本，用 Text 避免 P2000 截断）
   invoiceNumber String?                 // 解析出的发票号码（独立列，用于去重/查询，避免 JSON path 在 MySQL 下报错）

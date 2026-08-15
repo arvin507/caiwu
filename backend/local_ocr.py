@@ -227,16 +227,17 @@ def extract_invoice_number(items):
 
 def extract_amount_with_tax(items):
     # 价税合计 行上的 ¥ 金额（优先）；否则「小写」行
+    # 金额抽取走 _extract_amount_from_line，兼容 OCR 把小数点误识为 _/·/。/． 等。
     for it in items:
         if "价税合计" in it["text"]:
-            m = re.search(r"[¥￥]?\s*(\d+\.\d{2})", normalize_num_spaces(it["text"]))
-            if m:
-                return m.group(1)
+            v = _extract_amount_from_line(normalize_num_spaces(it["text"]))
+            if v:
+                return v
     for it in items:
         if "小写" in it["text"]:
-            m = re.search(r"[¥￥]?\s*(\d+\.\d{2})", normalize_num_spaces(it["text"]))
-            if m:
-                return m.group(1)
+            v = _extract_amount_from_line(normalize_num_spaces(it["text"]))
+            if v:
+                return v
     return None
 
 
@@ -261,9 +262,8 @@ def extract_detail_amounts(items, total):
     for i, it in enumerate(items):
         if i == total_idx:
             continue
-        m = re.search(r"(\d+\.\d{2})", normalize_num_spaces(it["text"]))
-        if m:
-            v = m.group(1)
+        v = _extract_amount_from_line(normalize_num_spaces(it["text"]))
+        if v:
             try:
                 if abs(float(v) - total_f) < 0.01:  # 排除价税合计本身
                     continue
@@ -352,12 +352,17 @@ def parse_file(file_path):
 
     异常（文件不存在 / 未识别到文字 / 栅格化失败等）向上抛，由调用方决定如何处理。
     模型已在进程内加载（_init_engine 有缓存），本函数不再触发重载。
+
+    先按类型分流：火车票（铁路电子客票）走专用解析分支，其余走增值税专/普票解析。
     """
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"文件不存在: {file_path}")
     items = render_pages_to_items(file_path)
     if not items:
         raise RuntimeError("未识别到任何文字")
+    if detect_train_ticket(items):
+        return parse_train_ticket(items)
+    # ── 增值税专/普票 ──
     total = extract_amount_with_tax(items)
     amount, tax = extract_detail_amounts(items, total)
     # 兜底：金额/税额缺一时，用 价税合计 差值补全
@@ -370,6 +375,7 @@ def parse_file(file_path):
         except (ValueError, TypeError):
             pass
     return {
+        "invoiceType": "vat",
         "invoiceCode": extract_invoice_code(items),
         "invoiceNumber": extract_invoice_number(items),
         "invoiceDate": extract_invoice_date(items),
@@ -381,6 +387,243 @@ def parse_file(file_path):
         "sellerTaxId": extract_seller_tax_id(items),
         "rawText": "\n".join(it["text"] for it in items),
     }
+
+
+# ── 火车票（铁路电子客票）识别 ───────────────────────────────────
+def detect_train_ticket(items):
+    """判断是否铁路电子客票（火车票）。
+
+    强特征（任一出现即判定为火车票，优先级高于增值税票）：
+      电子客票 / 车次 / 票价 / 买票请到12306 / 中国铁路 / 始发改签
+    这些词在增值税专/普票里不会出现。
+    """
+    blob = " ".join(it["text"] for it in items)
+    markers = ("电子客票", "车次", "票价", "买票请到12306", "中国铁路", "始发改签")
+    return any(m in blob for m in markers)
+
+
+def _find(items, regex, group=0, flags=0):
+    """在全部识别行里找第一个匹配 regex 的捕获组（默认返回整段匹配 group=0）。"""
+    for it in items:
+        m = re.search(regex, it["text"], flags)
+        if m:
+            return m.group(group)
+    return None
+
+
+def _find_all(items, regex, group=1, flags=0):
+    """收集全部匹配行（按出现顺序）。"""
+    out = []
+    for it in items:
+        m = re.search(regex, it["text"], flags)
+        if m:
+            out.append(m.group(group))
+    return out
+
+
+def _normalize_amount(raw):
+    """把 OCR 噪声金额归一化为 '123.45' 标准两位小数形式。
+
+    OCR 常见噪声：
+      - 小数点「.」被误识别为下划线「_」、逗号「,」、间隔号「·」、句号「。」或全角句号「．」
+      - 数字本身可能是全角（由 normalize_fullwidth 先归一半角）
+    返回 None 表示无法解析；否则一律返回 int.XX（两位小数）。
+    """
+    if not raw:
+        return None
+    s = normalize_fullwidth(raw)
+    # 统一常见误识的小数/分隔符为「.」
+    s = s.replace("_", ".").replace("·", ".").replace("。", ".").replace("．", ".")
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[^0-9.,]", "", s)  # 仅保留数字、点、逗号
+    # 处理千分位/小数点歧义：
+    #   同时含 , 和 . → 视 , 为千分位，去掉（如 1,234.00 → 1234.00）
+    #   仅含 ,       → 视 , 为小数点（如 62,00 → 62.00）
+    if "," in s and "." in s:
+        s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".")
+    m = re.match(r"(\d+)(?:\.(\d{1,2}))?", s)
+    if not m:
+        return None
+    int_part, dec_part = m.groups()
+    # 小数位：1 位表示十分位（如 137.5 → 137.50），2 位原样；
+    # 必须向右补 0（ljust），不能用 zfill 左补（会把 137.5 错成 137.05）。
+    dec = (dec_part if dec_part is not None else "00").ljust(2, "0")
+    return f"{int(int_part)}.{dec}"
+
+
+# 金额 token：整数任意位 + 可选千分位逗号 + 可选的小数部分（小数分隔符兼容
+# 正常的 . 以及 OCR 误识的 _/·/。/．）。先优先匹配「含小数」的金额，纯整数兜底。
+_AMOUNT_RE = re.compile(r"\d+(?:,\d{3})*(?:[._,·。．]\d{1,2})?")
+_AMOUNT_INT_RE = re.compile(r"\d+(?:,\d{3})*")
+
+
+def _extract_amount_from_line(text):
+    """从一行文本抽取第一个金额并归一成 '123.45'（两位小数）。
+
+    兼容 OCR 噪声：小数点被误识为下划线/逗号/间隔号/句号/全角句号、
+    数字全角、金额内部被插空格（调用方先 normalize_num_spaces）、千分位逗号。
+    优先取含小数的金额，避免在没有小数点时误抓其它整数；无匹配返回 None。
+    火车票票价与增值税「价税合计/金额/税额」共用。
+    """
+    if not text:
+        return None
+    m = _AMOUNT_RE.search(text)
+    if not m:
+        m = _AMOUNT_INT_RE.search(text)
+    if not m:
+        return None
+    return _normalize_amount(m.group(0))
+
+
+def parse_train_ticket(items):
+    """解析铁路电子客票，抽取行程相关字段。
+
+    用户决策：票价直接当 totalAmount，不拆分金额/税额（票面仅印一个票价）。
+    ownerName 维持上传人（与增值税票一致），本函数不处理归属人。
+    """
+    raw_text = "\n".join(it["text"] for it in items)
+
+    # 发票号 / 开票日期：复用通用抽取（火车票也有这两字段）
+    invoice_number = extract_invoice_number(items)
+    invoice_date = extract_invoice_date(items)
+
+    # 出发站 / 到达站：含「站」的中文地名行（按出现顺序，首个=出发，次个=到达）
+    stations = _find_all(items, r"([\u4e00-\u9fa5]{2,}站)")
+    departure = stations[0] if len(stations) >= 1 else None
+    arrival = stations[1] if len(stations) >= 2 else None
+
+    # 车次：G/D/C/K/Z/T/L + 数字（如 G7608）
+    train_no = _find(items, r"\b([GCDZKLT]\d{1,5})\b")
+
+    # 乘车日期 + 开车时间：2026年07月31日 12:29开（两者可能其一缺失，逐个安全解析）
+    ride_date = _find(items, r"(\d{4})年(\d{1,2})月(\d{1,2})日")
+    depart_time = _find(items, r"(\d{1,2}):(\d{2})开")
+    ride_date_iso = None
+    depart_time_hm = None
+    if ride_date:
+        m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", ride_date)
+        if m:
+            y, mo, d = m.groups()
+            ride_date_iso = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+    if depart_time:
+        m = re.match(r"(\d{1,2}):(\d{2})开", depart_time)
+        if m:
+            hh, mm = m.groups()
+            depart_time_hm = f"{int(hh):02d}:{mm}"
+    departure_datetime = (
+        f"{ride_date_iso} {depart_time_hm}" if ride_date_iso and depart_time_hm else None
+    )
+
+    # 车厢/座位：04车13C号
+    car_seat = _find(items, r"(\d{1,2}车\d{1,3}[A-F]?号)")
+
+    # 席别：二等座/一等座/商务座/特等座/软卧/硬卧/硬座/无座…
+    seat_class = _find(
+        items,
+        r"(一等座|二等座|商务座|特等座|优选一等座|软卧|硬卧|软座|硬座|无座|一等卧|二等卧)",
+    )
+
+    # 票价 → totalAmount（不拆分金额/税额）
+    # OCR 常把小数点「.」误识别为「_」（如 62_00）、逗号、间隔号或全角句号；
+    # 先用宽松正则抓出数字串，再由 _normalize_amount 归一成标准两位小数。
+    _fare_raw = _find(
+        items,
+        r"票价[：:]\s*[¥￥]?\s*([0-9０-９]+(?:[._,·。．\s]?[0-9０-９]{2})?)",
+        group=1,
+    )
+    fare = _normalize_amount(_fare_raw) if _fare_raw else None
+    total_amount = fare  # 用户决策：直接当价税合计
+
+    # 电子客票号 / 身份证号：OCR 常把数字、星号识别成全角，
+    # 先对整行做全角→半角归一化再抽取，避免漏抽。
+    _et_raw = _find(items, r"电子客票号[：:]\s*(.{15,30})", group=1)
+    electronic_ticket_no = (
+        re.sub(r"\D", "", normalize_fullwidth(_et_raw)) if _et_raw else None
+    )
+    # 身份证号行：归一化后匹配「数字+星号(半/全角)+数字」的遮挡形态
+    _id_candidate = None
+    for it in items:
+        norm = normalize_fullwidth(it["text"]).replace("＊", "*")
+        if re.search(r"\d{4,10}\*{2,8}\d{2,6}", norm):
+            _id_candidate = norm
+            break
+    id_no = _id_candidate
+
+    # 乘车人：紧跟在身份证号行之后的「纯中文姓名」行（布局稳定）；
+    # 兜底：找 2~4 字纯中文且非站/座/关键字 的行。
+    passenger = _extract_passenger(items, id_no)
+
+    # 购买方名称 / 统一社会信用代码（与增值税票同源）
+    buyer_name = _find(items, r"购买方名称[：:]\s*([\u4e00-\u9fa5A-Za-z0-9（）()]+)", group=1)
+    buyer_tax_id = _find(
+        items,
+        r"统一社会信用代码[：:]\s*([A-Z0-9]{15,20})",
+        group=1,
+    )
+    if buyer_tax_id:
+        buyer_tax_id = normalize_fullwidth(buyer_tax_id)
+
+    # 改签/退票标记
+    ticket_note = _find(items, r"(始发改签|改签|退票)")
+
+    # 销售方：铁路电子客票卖方为「中国铁路」（票面常不单独印销售方名称）
+    seller_name = "中国铁路"
+
+    return {
+        "invoiceType": "train",
+        "invoiceCode": None,
+        "invoiceNumber": invoice_number,
+        "invoiceDate": invoice_date,
+        "sellerName": seller_name,
+        "buyerName": buyer_name,
+        "amount": None,          # 用户决策：不拆分
+        "taxAmount": None,       # 用户决策：不拆分
+        "totalAmount": total_amount,
+        "sellerTaxId": buyer_tax_id,  # 火车票无「销售方税号」，用购买方信用代码占位/展示
+        "passengerName": passenger,
+        "departureStation": departure,
+        "arrivalStation": arrival,
+        "trainNo": train_no,
+        "rideDate": ride_date_iso,
+        "departureTime": depart_time_hm,
+        "departureDateTime": departure_datetime,
+        "carSeatNo": car_seat,
+        "seatClass": seat_class,
+        "fare": fare,
+        "electronicTicketNo": electronic_ticket_no,
+        "idNo": id_no,
+        "ticketNote": ticket_note,
+        "rawText": raw_text,
+    }
+
+
+def _extract_passenger(items, id_no):
+    """从包围盒行里抽乘车人姓名。
+
+    主策略：身份证号行的下一行若为 2~4 字纯中文姓名则取之（火车票布局稳定：
+    身份证号 → 乘车人 → 电子客票号）。
+    兜底：在整页找第一个 2~4 字纯中文、且非站名/席别/关键字的行。
+    """
+    idx = None
+    if id_no:
+        for i, it in enumerate(items):
+            if re.search(r"\d{4,10}\*{2,8}\d{2,6}", it["text"]):
+                idx = i
+                break
+    if idx is not None and idx + 1 < len(items):
+        nxt = items[idx + 1]["text"].strip()
+        if re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", nxt):
+            return nxt
+    # 兜底
+    stop = ("站", "座", "卧", "开", "改", "签", "退", "税", "信", "电", "客",
+            "铁", "国", "局", "码", "号", "总", "金", "日", "月", "年", "期")
+    for it in items:
+        t = it["text"].strip()
+        if re.fullmatch(r"[\u4e00-\u9fa5]{2,4}", t) and not any(s in t for s in stop):
+            return t
+    return None
 
 
 def main():

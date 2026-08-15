@@ -4,8 +4,8 @@ import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, InvoiceParsedData } from '@/types'
 import { openFilePreview } from '@/utils/openFilePreview'
 
-/** 可手动核对的字段（不含 rawText，原文只读展示） */
-const FIELDS: { key: keyof InvoiceParsedData; label: string }[] = [
+/** 增值税专/普票：可手动核对的字段（不含 rawText，原文只读展示） */
+const VAT_FIELDS: { key: keyof InvoiceParsedData; label: string }[] = [
   { key: 'invoiceCode', label: '发票代码' },
   { key: 'invoiceNumber', label: '发票号码' },
   { key: 'invoiceDate', label: '开票日期' },
@@ -15,6 +15,25 @@ const FIELDS: { key: keyof InvoiceParsedData; label: string }[] = [
   { key: 'amount', label: '金额' },
   { key: 'taxAmount', label: '税额' },
   { key: 'totalAmount', label: '价税合计' },
+]
+
+/** 火车票（铁路电子客票）：行程相关字段 */
+const TRAIN_FIELDS: { key: keyof InvoiceParsedData; label: string }[] = [
+  { key: 'invoiceNumber', label: '发票号码' },
+  { key: 'invoiceDate', label: '开票日期' },
+  { key: 'passengerName', label: '乘车人' },
+  { key: 'departureStation', label: '出发站' },
+  { key: 'arrivalStation', label: '到达站' },
+  { key: 'trainNo', label: '车次' },
+  { key: 'departureDateTime', label: '乘车日期/时间' },
+  { key: 'carSeatNo', label: '车厢/座位' },
+  { key: 'seatClass', label: '席别' },
+  { key: 'totalAmount', label: '票价' },
+  { key: 'buyerName', label: '购买方名称' },
+  { key: 'sellerTaxId', label: '统一社会信用代码' },
+  { key: 'electronicTicketNo', label: '电子客票号' },
+  { key: 'idNo', label: '身份证号' },
+  { key: 'ticketNote', label: '改签/退票' },
 ]
 
 function StatusTag({ status }: { status?: string }) {
@@ -50,8 +69,9 @@ export default function InvoiceDetailDrawer({ open, invoice, onClose }: Props) {
       return
     }
     const pd = invoice.parsedData
+    const active = invoice.invoiceType === 'train' ? TRAIN_FIELDS : VAT_FIELDS
     const next: Record<string, string> = {}
-    for (const f of FIELDS) next[f.key] = (pd[f.key] as string) ?? ''
+    for (const f of active) next[f.key] = (pd[f.key] as string) ?? ''
     next.rawText = pd.rawText ?? ''
     setFields(next)
   }, [open, invoice])
@@ -60,8 +80,9 @@ export default function InvoiceDetailDrawer({ open, invoice, onClose }: Props) {
     if (!invoice) return
     setSaving(true)
     try {
+      const active = invoice.invoiceType === 'train' ? TRAIN_FIELDS : VAT_FIELDS
       const parsedData: Record<string, unknown> = { rawText: fields.rawText ?? '' }
-      for (const f of FIELDS) parsedData[f.key] = fields[f.key] ? fields[f.key] : null
+      for (const f of active) parsedData[f.key] = fields[f.key] ? fields[f.key] : null
       await updateInvoice(invoice.id, { parsedData, parseStatus: 'done' })
       message.success('核对已保存')
       onClose()
@@ -125,7 +146,7 @@ export default function InvoiceDetailDrawer({ open, invoice, onClose }: Props) {
           </Typography.Paragraph>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            {FIELDS.map((f) => (
+            {(invoice.invoiceType === 'train' ? TRAIN_FIELDS : VAT_FIELDS).map((f) => (
               <div key={f.key}>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                   {f.label}
