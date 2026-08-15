@@ -1,13 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { parseInvoice } from '@/lib/invoiceParser'
-import { writeFile, mkdir, unlink } from 'fs/promises'
+import { parseInvoice, type ParsedInvoice } from '@/lib/invoiceParser'
+import { writeFile, mkdir, unlink, readFile } from 'fs/promises'
 import { createHash } from 'crypto'
+import { execFileSync } from 'child_process'
 import path from 'path'
+import os from 'os'
 
 export const runtime = 'nodejs'
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads')
+
+// 拆分多页 PDF 用的 Python 解释器（与 local_ocr.py 同源，带 pymupdf）
+function resolveSplitPython(): string {
+  const cands = [
+    process.env.LOCAL_OCR_PYTHON,
+    'C:/py311/python.exe',
+    'C:/Users/Administrator/.workbuddy/binaries/python/envs/default/Scripts/python.exe',
+    'python3',
+    'python',
+  ].filter(Boolean) as string[]
+  for (const c of cands) {
+    if (require('fs').existsSync(c)) return c
+  }
+  return 'python3'
+}
+
+/**
+ * 把多页 PDF 按页拆成若干单页 PDF（落盘到 UPLOAD_DIR），返回按页序的绝对路径数组。
+ * 单页 PDF / 非 PDF 直接返回 [原路径]。失败抛出异常（由上层记为解析失败）。
+ */
+async function splitPdfToPages(srcAbsPath: string): Promise<string[]> {
+  const py = resolveSplitPython()
+  const script = path.join(process.cwd(), 'split_pdf.py')
+  const out = execFileSync(py, [script, srcAbsPath, UPLOAD_DIR], {
+    encoding: 'utf-8',
+    maxBuffer: 1024 * 1024 * 64,
+  })
+  const paths = JSON.parse(out.trim()) as string[]
+  return paths
+}
 
 // GET /api/invoices —— 发票列表（按上传时间倒序）
 export async function GET() {
@@ -73,24 +105,26 @@ export async function POST(req: NextRequest) {
   const updated: Array<Awaited<ReturnType<typeof prisma.invoice.update>>> = []
   const skipped: Array<{ fileName: string; invoiceNumber: string; existingId: string; reason: string }> = []
 
-  for (const file of files) {
-    const ext = path.extname(file.name) || ''
+  /**
+   * 处理「单张发票」：基于解析结果 + 文件内容，做幂等去重后建/更新记录。
+   * 被两类输入复用：①单页文件（图片 / 单张 PDF）②多页 PDF 拆分出的每一页。
+   * @param parsed 单张解析结果（扁平 ParsedInvoice，不含 multi）
+   * @param buffer 该张发票对应的文件内容（图片 / 单页 PDF 字节）
+   * @param fileName 展示用文件名（多页时附页号）
+   */
+  async function upsertOne(
+    parsed: ParsedInvoice | null,
+    buffer: Buffer,
+    fileName: string,
+    parseErr?: string | null,
+  ): Promise<void> {
+    const ext = fileName.endsWith('.pdf') ? '.pdf' : (path.extname(fileName) || '')
     const storageName = `inv-${crypto.randomUUID()}${ext}`
     const absPath = path.join(UPLOAD_DIR, storageName)
-    const buffer = Buffer.from(await file.arrayBuffer())
     await writeFile(absPath, buffer)
 
     // 文件内容指纹：重复上传（含「先失败、后重试成功」）靠它幂等去重
     const fileHash = createHash('sha256').update(buffer).digest('hex')
-
-    // 先解析，拿到发票号码（解析失败则无号码，但仍可凭 fileHash 去重）
-    let parsed: Awaited<ReturnType<typeof parseInvoice>> | null = null
-    let parseError: string | null = null
-    try {
-      parsed = await parseInvoice(absPath)
-    } catch (e) {
-      parseError = String((e as Error)?.message ?? e)
-    }
     const invoiceNumber = parsed?.invoiceNumber || null
 
     // 去重查询：优先 fileHash（同一文件，失败记录也带此值），其次发票号码
@@ -110,40 +144,40 @@ export async function POST(req: NextRequest) {
       if (linked) {
         await unlink(absPath).catch(() => {}) // 丢弃本次落盘文件
         skipped.push({
-          fileName: file.name,
+          fileName,
           invoiceNumber: invoiceNumber ?? '',
           existingId: existing.id,
           reason: '已关联报销单',
         })
-        continue
+        return
       }
       // 幂等更新：复写解析结果，保留原记录的文件与 id（不新建第二条）
       const inv = await prisma.invoice.update({
         where: { id: existing.id },
         data: {
           ownerName,
-          fileName: file.name,
-          fileType: file.type,
+          fileName,
+          fileType: ext ? 'application/pdf' : 'image/*',
           invoiceDate: invoiceDate ? new Date(invoiceDate) : undefined,
           note,
           invoiceNumber,
           invoiceType: (parsed as any)?.invoiceType ?? 'vat',
           parseStatus: parsed ? 'done' : 'failed',
           parsedData: parsed as any,
-          parseError,
+          parseError: parseErr ?? null,
         },
       })
       await unlink(absPath).catch(() => {}) // 丢弃本次新写入的文件，复用原记录文件
       updated.push(inv)
-      continue
+      return
     }
 
     // 未重复：建记录并直接写入解析结果（parseStatus 同步为 done / failed）
     const inv = await prisma.invoice.create({
       data: {
         ownerName,
-        fileName: file.name,
-        fileType: file.type,
+        fileName,
+        fileType: ext ? 'application/pdf' : 'image/*',
         invoiceDate: invoiceDate ? new Date(invoiceDate) : new Date(),
         note,
         storagePath: `/uploads/${storageName}`,
@@ -152,10 +186,62 @@ export async function POST(req: NextRequest) {
         invoiceType: (parsed as any)?.invoiceType ?? 'vat',
         parseStatus: parsed ? 'done' : 'failed',
         parsedData: parsed as any,
-        parseError,
+        parseError: parseErr ?? null,
       },
     })
     created.push(inv)
+  }
+
+  for (const file of files) {
+    const ext = path.extname(file.name) || ''
+    const storageName = `inv-${crypto.randomUUID()}${ext}`
+    const absPath = path.join(UPLOAD_DIR, storageName)
+    const buffer = Buffer.from(await file.arrayBuffer())
+    await writeFile(absPath, buffer)
+
+    // 先解析，拿到发票号码（解析失败则无号码，但仍可凭 fileHash 去重）
+    let parsed: Awaited<ReturnType<typeof parseInvoice>> | null = null
+    let parseError: string | null = null
+    try {
+      parsed = await parseInvoice(absPath)
+    } catch (e) {
+      parseError = String((e as Error)?.message ?? e)
+    }
+
+    // 多张发票（合并 PDF 一页一张等）：拆分后逐张上传
+    if (parsed && parsed.multi && parsed.pages && parsed.pages.length > 0) {
+      let pagePaths: string[] = []
+      try {
+        pagePaths = await splitPdfToPages(absPath)
+      } catch (e) {
+        parseError = `PDF 拆分失败: ${String((e as Error)?.message ?? e)}`
+      }
+      // 丢弃合并原文件（避免落盘重复大文件；拆分出的单页已各自落盘）
+      await unlink(absPath).catch(() => {})
+      if (pagePaths.length === 0) {
+        // 拆分失败兜底：当单张处理（保留原文件）
+        await upsertOne(parsed.pages[0] ?? null, buffer, file.name)
+        continue
+      }
+      for (let i = 0; i < pagePaths.length; i++) {
+        const pageBuf = await readFile(pagePaths[i]).catch(() => null)
+        if (!pageBuf) continue
+        const pageParsed = parsed.pages[i] ?? null
+        const pageFileName = pagePaths.length > 1
+          ? `${file.name.replace(/\.pdf$/i, '')}_第${i + 1}页.pdf`
+          : file.name
+        await upsertOne(pageParsed, pageBuf, pageFileName, parseError)
+        // 清理拆分临时文件（fire-and-forget，失败不影响主流程）
+        await unlink(pagePaths[i]).catch(() => {})
+      }
+      continue
+    }
+
+    // 单张：直接基于解析结果建/更新（注意 multi 拆分失败时已用 pages[0] 兜底）
+    const singleParsed = parsed && parsed.multi ? (parsed.pages?.[0] ?? null) : parsed
+    await upsertOne(singleParsed, buffer, file.name, parseError)
+    // upsertOne 内部会重新落盘为 inv-<uuid> 文件；此处外部这份 absPath 已成孤儿，清理之
+    await unlink(absPath).catch(() => {})
   }
 
   return NextResponse.json({ created, updated, skipped }, { status: 201 })

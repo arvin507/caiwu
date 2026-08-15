@@ -95,24 +95,42 @@ def _init_engine():
 
 
 def recognize(img_path):
-    """对单张图片/PDF页（已落盘为图片）做 OCR，返回 list[(box, text, score)]。"""
+    """对单张图片/PDF页（已落盘为图片）做 OCR，返回 list[(box, text, score)]。
+
+    健壮性：PaddleOCR 2.9.x 在复杂版面（带表格线/印章的扫描件）下，
+    部分行会返回 3 元组 [box, (text, score), cls] 或 text 已是字符串；
+    这里统一兼容 2/3 元组，并安全取出 (text, score)。
+    """
     name, eng = _init_engine()
+    out = []
+
+    def _unpack(line):
+        """从单行解析出 (box, text, score)，兼容多种返回形态。"""
+        # 形态1：长度 2/3 的 [box, (text,score)[, cls]]
+        if isinstance(line, (list, tuple)) and len(line) >= 2:
+            box = line[0]
+            payload = line[1]
+            if isinstance(payload, (list, tuple)) and len(payload) >= 2:
+                # (text, score)
+                return box, str(payload[0]), float(payload[1])
+            # 退路：payload 本身就是 (text, score) 不可解时，跳过
+            return None
+        return None
+
     if name == "paddleocr":
-        # PaddleOCR: ocr.ocr(path, cls) -> [ [ [box, (text, score)], ... ] ]（每图一页）
         res = eng.ocr(img_path, cls=True)
-        out = []
         if res:
             for page in res:
                 if not page:
                     continue
                 for line in page:
-                    box, (text, score) = line
-                    out.append((box, str(text), float(score)))
+                    r = _unpack(line)
+                    if r:
+                        out.append(r)
         return out
     else:
         # RapidOCR: ocr(path) -> ( [ [box, text, score], ... ], _ )
         res, _ = eng(img_path)
-        out = []
         if res:
             for line in res:
                 box, text, score = line
@@ -155,9 +173,13 @@ def box_center(box):
 
 
 def render_pages_to_items(file_path):
-    """把文件渲染为图片并 OCR，返回合并坐标后的 items 列表。
+    """把文件渲染为图片并 OCR，返回 (items, page_bounds)。
 
-    图片：直接识别。
+    items：合并坐标后的识别行列表（box 已按页 y 偏移连续）。
+    page_bounds：list of (y0, y1)，每页 items 在整体坐标中的 y 区间，
+                 供多张发票「按页切分」使用。
+
+    图片：直接识别（单页，page_bounds 为 [(0, +inf)]）。
     PDF：逐页栅格化（dpi=200），每页 items 的 y 加页码偏移使整体坐标连续，
          便于跨页做几何归位（如销售方在最后一页右侧仍 x 最大）。
     """
@@ -176,6 +198,7 @@ def render_pages_to_items(file_path):
         raise ValueError(f"本地 OCR 暂不支持的文件类型「{ext}」（当前仅支持图片 / PDF）")
 
     items = []
+    page_bounds = []  # (y0, y1)
     y_offset = 0.0
     # 临时 png 写到系统临时目录（避免在 workspace/uploads 下触发文件删除钩子）
     tmpdir = tempfile.mkdtemp(prefix="local_ocr_")
@@ -184,31 +207,32 @@ def render_pages_to_items(file_path):
         for page in pages:
             src, page_h = page
             if isinstance(src, str):
-                # 图片文件
+                # 图片文件（单页）：bound 用一个足够大的上界即可
                 recs = recognize(src)
-                items.extend(
-                    {"box": [list(p) for p in b], "text": t, "score": s}
-                    for (b, t, s) in recs
-                )
+                for (b, t, s) in recs:
+                    items.append({"box": [list(p) for p in b], "text": t, "score": s})
+                page_bounds.append((y_offset, y_offset + 1e9))
             else:
                 # PDF 页：pixmap 转临时 png（系统 temp 目录）
                 tmp = os.path.join(tmpdir, f"page{page_idx}.png")
                 page_idx += 1
                 src.save(tmp)
                 recs = recognize(tmp)
+                y0 = y_offset
                 for (b, t, s) in recs:
                     bb = [list(p) for p in b]
                     for p in bb:
                         p[1] += y_offset
                     items.append({"box": bb, "text": t, "score": s})
                 y_offset += (page_h or 0)
+                page_bounds.append((y0, y_offset))
     finally:
         # 清理临时目录；删除钩子可能抛非 OSError，故广谱捕获，忽略清理失败
         try:
             shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
             pass
-    return items
+    return items, page_bounds
 
 
 # ── 字段抽取（几何归位） ─────────────────────────────────────────
@@ -226,16 +250,16 @@ def extract_invoice_number(items):
 
 
 def extract_amount_with_tax(items):
-    # 价税合计 行上的 ¥ 金额（优先）；否则「小写」行
-    # 金额抽取走 _extract_amount_from_line，兼容 OCR 把小数点误识为 _/·/。/． 等。
-    for it in items:
-        if "价税合计" in it["text"]:
-            v = _extract_amount_from_line(normalize_num_spaces(it["text"]))
-            if v:
-                return v
-    for it in items:
-        if "小写" in it["text"]:
-            v = _extract_amount_from_line(normalize_num_spaces(it["text"]))
+    # 价税合计 / 小写 标签行上的 ¥ 金额（优先）。
+    # 新版电子发票（数电票）常把金额放在标签的下一行，如：
+    #   "价税合计 (大写)" / "肆佰捌拾陆圆捌角陆分" / "（小写）" / "￥ 486.86"
+    # 因此本行抽不到金额时，向后拼接至多 2 行再抽，兼容标签与值分行识别的版式。
+    for i, it in enumerate(items):
+        if "价税合计" in it["text"] or "小写" in it["text"]:
+            window = it["text"]
+            for j in range(i + 1, min(i + 3, len(items))):
+                window += " " + items[j]["text"]
+            v = _extract_amount_from_line(normalize_num_spaces(window))
             if v:
                 return v
     return None
@@ -262,8 +286,9 @@ def extract_detail_amounts(items, total):
     for i, it in enumerate(items):
         if i == total_idx:
             continue
-        v = _extract_amount_from_line(normalize_num_spaces(it["text"]))
-        if v:
+        # 一行内可能同时含 金额 与 税额（如明细行「... 459.30 459.30 6% 27.56」），
+        # 必须收集该行全部金额，否则税额会被漏抽导致配对失败。
+        for v in _extract_all_amounts_from_line(normalize_num_spaces(it["text"])):
             try:
                 if abs(float(v) - total_f) < 0.01:  # 排除价税合计本身
                     continue
@@ -312,13 +337,21 @@ def extract_buyer(items):
 
 
 def extract_invoice_date(items):
-    for it in items:
+    for i, it in enumerate(items):
         if "开票日期" in it["text"]:
-            # yyyy年mm月dd日 / yyyy-mm-dd / yyyy/mm/dd
+            # 先在本行找（传统版式：标签与日期同行）
             m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", it["text"])
-            if m:
-                return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-            m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", it["text"])
+            if not m:
+                m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", it["text"])
+            # 数电票：日期常写在「开票日期:」的下一行，本行没命中就向后看至多 2 行
+            if not m:
+                for j in range(i + 1, min(i + 3, len(items))):
+                    m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", items[j]["text"])
+                    if m:
+                        break
+                    m = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", items[j]["text"])
+                    if m:
+                        break
             if m:
                 return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
     return None
@@ -347,22 +380,8 @@ def extract_invoice_code(items):
     return None
 
 
-def parse_file(file_path):
-    """识别单张发票文件并返回结构化 dict。
-
-    异常（文件不存在 / 未识别到文字 / 栅格化失败等）向上抛，由调用方决定如何处理。
-    模型已在进程内加载（_init_engine 有缓存），本函数不再触发重载。
-
-    先按类型分流：火车票（铁路电子客票）走专用解析分支，其余走增值税专/普票解析。
-    """
-    if not os.path.isfile(file_path):
-        raise FileNotFoundError(f"文件不存在: {file_path}")
-    items = render_pages_to_items(file_path)
-    if not items:
-        raise RuntimeError("未识别到任何文字")
-    if detect_train_ticket(items):
-        return parse_train_ticket(items)
-    # ── 增值税专/普票 ──
+def _parse_vat(items):
+    """对一组 items（单张增值税专/普票）抽取字段。"""
     total = extract_amount_with_tax(items)
     amount, tax = extract_detail_amounts(items, total)
     # 兜底：金额/税额缺一时，用 价税合计 差值补全
@@ -386,6 +405,85 @@ def parse_file(file_path):
         "totalAmount": total,
         "sellerTaxId": extract_seller_tax_id(items),
         "rawText": "\n".join(it["text"] for it in items),
+    }
+
+
+def _parse_train(items):
+    """对一组 items（单张火车票）抽取字段。"""
+    return parse_train_ticket(items)
+
+
+def _looks_like_single_invoice(items):
+    """启发式判断：整份文件是否「很可能只有一张发票」。
+
+    单张发票通常能在全文中找到唯一的「价税合计」或「合 计」金额行（增值税票），
+    或唯一「票价」行（火车票）。多张合并时这些关键行会出现多次，命中即视为多张。
+    返回 True 表示按单张处理（保持旧行为，零回归）。
+    """
+    total_idx = next((i for i, it in enumerate(items) if "价税合计" in it["text"]), None)
+    if total_idx is not None:
+        # 价税合计出现 >1 次 → 多张
+        cnt = sum(1 for it in items if "价税合计" in it["text"])
+        if cnt > 1:
+            return False
+    # 火车票特征：票价行出现多次 → 多张
+    fare_cnt = sum(1 for it in items if "票价" in it["text"])
+    if fare_cnt > 1:
+        return False
+    return True
+
+
+def parse_file(file_path):
+    """识别发票文件并返回结构化 dict。
+
+    异常（文件不存在 / 未识别到文字 / 栅格化失败等）向上抛，由调用方决定如何处理。
+    模型已在进程内加载（_init_engine 有缓存），本函数不再触发重载。
+
+    ⚠️ 多页 / 多张发票支持（2026-08-15）：
+      合并 PDF（一页一张、或多页拼多张）过去只识别第一张。现改为：
+        1. 先按「整份是否只有一张」启发式判断（_looks_like_single_invoice）；
+           单张 → 维持旧逻辑，返回扁平结构（零回归）。
+        2. 多张 → 逐页探测该页发票类型（火车票 / 增值税），按探测类型把
+           整份 items 切成每张发票的 items 块（边界 = 各页 y 范围，跨页同一张
+           也安全合并），每张独立 parse，最终返回
+           {"multi": True, "pageCount": N, "pages": [per-page dict, ...]}。
+      兼容：单页图片 / 单张 PDF 仍返回扁平 {invoiceType,...}，上游按
+      (resp.get("multi")) 区分。
+    """
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    items, page_bounds = render_pages_to_items(file_path)
+    if not items:
+        raise RuntimeError("未识别到任何文字")
+
+    # 单张：维持旧行为，返回扁平结构（含 train / vat）
+    if _looks_like_single_invoice(items):
+        if detect_train_ticket(items):
+            return _parse_train(items)
+        return _parse_vat(items)
+
+    # 多张：按页探测类型并逐张切分解析
+    page_types = []
+    for (y0, y1) in page_bounds:
+        sub = [it for it in items if y0 <= it["box"][0][1] and it["box"][0][1] < y1]
+        page_types.append("train" if detect_train_ticket(sub) else "vat")
+
+    pages = []
+    for idx, (y0, y1) in enumerate(page_bounds):
+        sub = [it for it in items if y0 <= it["box"][0][1] and it["box"][0][1] < y1]
+        if not sub:
+            continue  # 空页跳过（不应发生）
+        parsed = _parse_train(sub) if page_types[idx] == "train" else _parse_vat(sub)
+        pages.append(parsed)
+
+    if len(pages) == 0:
+        # 极端兜底：整份当一张增值税处理
+        return _parse_vat(items)
+
+    return {
+        "multi": True,
+        "pageCount": len(page_bounds),
+        "pages": pages,
     }
 
 
@@ -475,6 +573,25 @@ def _extract_amount_from_line(text):
     if not m:
         return None
     return _normalize_amount(m.group(0))
+
+
+def _extract_all_amounts_from_line(text):
+    """从一行文本抽取全部金额（用于明细行同时含 金额/税额 的场景），
+    返回归一成 '123.45' 的列表；无匹配返回空列表。
+    """
+    if not text:
+        return []
+    out = []
+    for m in _AMOUNT_RE.finditer(text):
+        v = _normalize_amount(m.group(0))
+        if v:
+            out.append(v)
+    if not out:
+        for m in _AMOUNT_INT_RE.finditer(text):
+            v = _normalize_amount(m.group(0))
+            if v:
+                out.append(v)
+    return out
 
 
 def parse_train_ticket(items):

@@ -28,6 +28,12 @@ export interface ParsedInvoice {
   /** 发票类型：vat(增值税) | train(铁路电子客票) */
   invoiceType?: 'vat' | 'train'
   rawText: string
+  /** 多张发票（合并 PDF 一页一张等）：存在且为 true 表示 pages 是切分后的每张结果 */
+  multi?: boolean
+  /** 原始页数（PDF）或 1（图片） */
+  pageCount?: number
+  /** 逐张解析结果（multi 时有效） */
+  pages?: ParsedInvoice[]
 }
 
 export async function parseInvoice(filePath: string): Promise<ParsedInvoice> {

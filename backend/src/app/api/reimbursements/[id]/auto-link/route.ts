@@ -132,16 +132,10 @@ export async function POST(
       })
       continue
     }
-    if (matches.length > 1) {
-      unmatched.push({
-        invoiceId: inv.id,
-        invoiceNumber: inv.invoiceNumber,
-        amount: amt,
-        reason: 'ambiguous',
-      })
-      continue
-    }
 
+    // 同一金额存在多条未关联明细行时，金额等价可互换，直接贪心取第一条关联。
+    // 例：两张 141 发票 + 两条 141 明细 → 各挂一条，两张全部自动关联。
+    // usedLineIds 防止同一条明细在同一批次内被两张发票重复占用（不会超额挂账）。
     const line = matches[0]
     // 写一条关联（1:1 精确匹配）；同一发票可再被人工关联到其它行（N:1）
     if (line.type === 'item') {
