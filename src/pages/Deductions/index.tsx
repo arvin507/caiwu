@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { Key } from 'react'
 import {
+  Alert,
   App as AntApp,
   Button,
   Card,
@@ -17,8 +19,11 @@ import {
 } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
+  CheckSquareOutlined,
+  CloseOutlined,
   ContainerOutlined,
   DownloadOutlined,
+  EditOutlined,
   FileDoneOutlined,
   ReloadOutlined,
 } from '@ant-design/icons'
@@ -72,6 +77,15 @@ export default function Deductions() {
   const [markTarget, setMarkTarget] = useState<DeductionRow | null>(null)
   const [markForm, setMarkForm] = useState<{ status: DeductionStatus; period: string | null; note: string }>({
     status: 'unconfirmed',
+    period: null,
+    note: '',
+  })
+
+  // 批量选择
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchForm, setBatchForm] = useState<{ status: DeductionStatus; period: string | null; note: string }>({
+    status: 'selected',
     period: null,
     note: '',
   })
@@ -171,6 +185,63 @@ export default function Deductions() {
     }
   }
 
+  const openBatch = () => {
+    setBatchForm({ status: 'selected', period: null, note: '' })
+    setBatchOpen(true)
+  }
+
+  // 批量快捷：仅更新状态
+  const batchQuick = async (status: DeductionStatus) => {
+    const ids = [...selectedRowKeys]
+    if (ids.length === 0) return
+    try {
+      const res = await fetch('/api/deductions/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, status }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || '批量操作失败')
+      }
+      const d = (await res.json()) as { updated: number; skipped: number }
+      message.success(`已更新 ${d.updated} 项${d.skipped ? `，跳过 ${d.skipped} 项` : ''}`)
+      setSelectedRowKeys([])
+      await loadLedger()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '批量操作失败')
+    }
+  }
+
+  // 批量详细设置：状态 + 所属期 + 备注
+  const submitBatch = async () => {
+    const ids = [...selectedRowKeys]
+    if (ids.length === 0) return
+    try {
+      const res = await fetch('/api/deductions/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ids,
+          status: batchForm.status,
+          declarePeriod: batchForm.period,
+          note: batchForm.note,
+        }),
+      })
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error || '批量保存失败')
+      }
+      const d = (await res.json()) as { updated: number; skipped: number }
+      message.success(`已更新 ${d.updated} 项${d.skipped ? `，跳过 ${d.skipped} 项` : ''}`)
+      setBatchOpen(false)
+      setSelectedRowKeys([])
+      await loadLedger()
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '批量保存失败')
+    }
+  }
+
   // 申报底稿导出 CSV（带 BOM，Excel 可直接打开）
   const exportCsv = () => {
     if (!summary) return
@@ -193,6 +264,12 @@ export default function Deductions() {
     a.download = `进项抵扣申报底稿${summary.period ? '_' + summary.period : ''}.csv`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  const rowSelection = {
+    selectedRowKeys,
+    onChange: (keys: Key[]) => setSelectedRowKeys(keys as string[]),
+    preserveSelectedRowKeys: true,
   }
 
   const ledgerColumns: ColumnsType<Row> = [
@@ -365,6 +442,44 @@ export default function Deductions() {
                   <Button onClick={loadLedger}>刷新</Button>
                 </Space>
 
+                {selectedRowKeys.length > 0 && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                    message={
+                      <Space wrap size="small">
+                        <CheckSquareOutlined />
+                        <Text strong>已选 {selectedRowKeys.length} 项</Text>
+                        <Text type="secondary">快捷：</Text>
+                        <Button size="small" onClick={() => batchQuick('selected')}>
+                          标记已勾选
+                        </Button>
+                        <Button size="small" onClick={() => batchQuick('deducted')}>
+                          标记已抵扣
+                        </Button>
+                        <Button size="small" danger onClick={() => batchQuick('transferred_out')}>
+                          进项转出
+                        </Button>
+                        <Button size="small" onClick={() => batchQuick('unconfirmed')}>
+                          重置未勾选
+                        </Button>
+                        <Button size="small" icon={<EditOutlined />} onClick={openBatch}>
+                          详细设置…
+                        </Button>
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<CloseOutlined />}
+                          onClick={() => setSelectedRowKeys([])}
+                        >
+                          取消选择
+                        </Button>
+                      </Space>
+                    }
+                  />
+                )}
+
                 <Table<Row>
                   rowKey="id"
                   dataSource={rows}
@@ -372,6 +487,7 @@ export default function Deductions() {
                   loading={loading}
                   scroll={{ x: 'max-content' }}
                   pagination={{ pageSize: 10 }}
+                  rowSelection={rowSelection}
                 />
 
                 <Modal
@@ -423,6 +539,44 @@ export default function Deductions() {
                       />
                     </Space>
                   )}
+                </Modal>
+
+                <Modal
+                  title={`批量标记抵扣状态（${selectedRowKeys.length} 项）`}
+                  open={batchOpen}
+                  onOk={submitBatch}
+                  onCancel={() => setBatchOpen(false)}
+                  okText="批量保存"
+                  cancelText="取消"
+                >
+                  <Space direction="vertical" style={{ width: '100%' }} size="middle">
+                    <div>
+                      <Text>勾选状态</Text>
+                      <Select
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={batchForm.status}
+                        onChange={(v) => setBatchForm((f) => ({ ...f, status: v }))}
+                        options={STATUS_OPTIONS}
+                      />
+                    </div>
+                    <div>
+                      <Text>申报所属期</Text>
+                      <DatePicker
+                        picker="month"
+                        style={{ width: '100%', marginTop: 4 }}
+                        value={batchForm.period ? dayjs(batchForm.period) : null}
+                        onChange={(d) =>
+                          setBatchForm((f) => ({ ...f, period: d ? d.format('YYYY-MM') : null }))
+                        }
+                        allowClear
+                      />
+                    </div>
+                    <Input.TextArea
+                      placeholder="备注（如进项转出原因，将写入全部选中项）"
+                      value={batchForm.note}
+                      onChange={(e) => setBatchForm((f) => ({ ...f, note: e.target.value }))}
+                    />
+                  </Space>
                 </Modal>
               </Card>
             ),
