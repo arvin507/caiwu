@@ -20,6 +20,11 @@ export interface ParsedInvoice {
   invoiceDate?: string | null
   sellerName?: string | null
   buyerName?: string | null
+  buyerTaxNo?: string | null
+  /** 票面标题（区分专票/普票/数电票），能否抵扣的前提 */
+  voucherTitle?: string | null
+  /** 票面/反推税率，小数形式字符串如 "0.13"；火车票固定 "0.09" */
+  taxRate?: string | null
   amount?: string | null
   taxAmount?: string | null
   totalAmount?: string | null

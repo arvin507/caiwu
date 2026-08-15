@@ -380,6 +380,80 @@ def extract_invoice_code(items):
     return None
 
 
+def extract_buyer_tax_id(items):
+    # 购买方在左 → x 中心最靠左的「识别号」行后的 15~20 位
+    # （OCR 常把识别号识别成全角，先归一化再匹配）
+    best = None
+    for it in items:
+        if "识别号" in it["text"]:
+            cx = box_center(it["box"])[0]
+            norm = normalize_fullwidth(it["text"])
+            m = re.search(r"识别号[：:]?\s*([A-Z0-9]{15,20})", norm)
+            if m:
+                if best is None or cx < best[0]:
+                    best = (cx, m.group(1))
+    return best[1] if best else None
+
+
+# 标准增值税税率集合（用于把「税额/金额」反推的税率吸附到最近档位）
+_STD_RATES = [0.01, 0.03, 0.05, 0.06, 0.09, 0.11, 0.13, 0.16, 0.17]
+
+
+def _snap_rate(r):
+    """把任意 0~1 的税率吸附到最接近的标准档位。"""
+    return min(_STD_RATES, key=lambda x: abs(x - r))
+
+
+def extract_tax_rate(items):
+    """从票面「税率」标签旁抽百分比税率，如 13% / 9% / 6%。"""
+    for it in items:
+        m = re.search(r"税率[：:\s]*(\d{1,2})\s*%", it["text"])
+        if m:
+            return round(int(m.group(1)) / 100, 2)
+    return None
+
+
+def extract_voucher_title(items):
+    """抽出票面标题，用于区分「专票 / 普票」（能否抵扣的前提）。
+
+    判定优先级（避免数电票与普通电子发票混淆）：
+      - 含「专用」或「增值税专用发票」或「机动车销售统一发票」 → 专票类（可抵）
+      - 含「普通」或「增值税电子普通发票」 → 普票类（不可抵）
+      - 仅含「电子发票」且未标注专/普 → 视为未知（规则引擎按普票处理，可人工改）
+    """
+    blob = " ".join(it["text"] for it in items)
+    if "增值税专用发票" in blob or "电子专票" in blob or "增值税电子专用发票" in blob:
+        return "增值税专用发票"
+    if "机动车销售统一发票" in blob:
+        return "机动车销售统一发票"
+    if "增值税普通发票" in blob or "增值税电子普通发票" in blob or "电子普票" in blob:
+        return "增值税普通发票"
+    # 数电票：标题常为「电子发票（增值税专用发票）」/「电子发票（普通发票）」
+    if "电子发票" in blob and "专用" in blob:
+        return "增值税专用发票"
+    if "电子发票" in blob and "普通" in blob:
+        return "增值税普通发票"
+    if "电子发票" in blob:
+        return "电子发票"
+    return None
+
+
+def _calc_vat_tax_rate(items, amount, tax):
+    """增值税票面税率：优先用 税额/金额 反推并吸附到标准档（最准），
+    否则取票面「税率 13%」文本，再否则返回 None。"""
+    ocr = extract_tax_rate(items)
+    if amount and tax:
+        try:
+            r = round(float(tax) / float(amount), 4)
+            if 0 < r < 1:
+                return f"{_snap_rate(r):.2f}"
+        except (ValueError, TypeError):
+            pass
+    if ocr is not None:
+        return f"{ocr:.2f}"
+    return None
+
+
 def _parse_vat(items):
     """对一组 items（单张增值税专/普票）抽取字段。"""
     total = extract_amount_with_tax(items)
@@ -400,8 +474,11 @@ def _parse_vat(items):
         "invoiceDate": extract_invoice_date(items),
         "sellerName": extract_seller(items),
         "buyerName": extract_buyer(items),
+        "buyerTaxNo": extract_buyer_tax_id(items),
+        "voucherTitle": extract_voucher_title(items),
         "amount": amount,
         "taxAmount": tax,
+        "taxRate": _calc_vat_tax_rate(items, amount, tax),
         "totalAmount": total,
         "sellerTaxId": extract_seller_tax_id(items),
         "rawText": "\n".join(it["text"] for it in items),
@@ -594,6 +671,22 @@ def _extract_all_amounts_from_line(text):
     return out
 
 
+def extract_train_tax(items):
+    """数电铁路电子客票票面直接印「税额 ¥X.XX」，抽出它（纸质火车票无此行返回 None）。
+
+    取「税额」标签行及其后至多 2 行拼接，兼容数电票标签与值分行版式。
+    """
+    for i, it in enumerate(items):
+        if "税额" in it["text"]:
+            window = it["text"]
+            for j in range(i + 1, min(i + 3, len(items))):
+                window += " " + items[j]["text"]
+            v = _extract_amount_from_line(normalize_num_spaces(window))
+            if v:
+                return v
+    return None
+
+
 def parse_train_ticket(items):
     """解析铁路电子客票，抽取行程相关字段。
 
@@ -653,6 +746,16 @@ def parse_train_ticket(items):
     fare = _normalize_amount(_fare_raw) if _fare_raw else None
     total_amount = fare  # 用户决策：直接当价税合计
 
+    # 数电铁路客票票面直接给「税额」，优先采用（更准）；纸质火车票无此行 → None，
+    # 规则引擎按 票价/(1+9%)×9% 公式兜底计算。有了税额可倒推不含税金额。
+    train_tax = extract_train_tax(items)
+    train_amount = None
+    if fare and train_tax:
+        try:
+            train_amount = f"{round(float(fare) - float(train_tax), 2):.2f}"
+        except (ValueError, TypeError):
+            train_amount = None
+
     # 电子客票号 / 身份证号：OCR 常把数字、星号识别成全角，
     # 先对整行做全角→半角归一化再抽取，避免漏抽。
     _et_raw = _find(items, r"电子客票号[：:]\s*(.{15,30})", group=1)
@@ -695,8 +798,11 @@ def parse_train_ticket(items):
         "invoiceDate": invoice_date,
         "sellerName": seller_name,
         "buyerName": buyer_name,
-        "amount": None,          # 用户决策：不拆分
-        "taxAmount": None,       # 用户决策：不拆分
+        "buyerTaxNo": buyer_tax_id,
+        "voucherTitle": "电子发票（铁路电子客票）",
+        "amount": train_amount,
+        "taxAmount": train_tax,
+        "taxRate": "0.09",       # 铁路电子客票法定抵扣率 9%（公告2024年第8号）
         "totalAmount": total_amount,
         "sellerTaxId": buyer_tax_id,  # 火车票无「销售方税号」，用购买方信用代码占位/展示
         "passengerName": passenger,

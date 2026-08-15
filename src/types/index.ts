@@ -125,6 +125,12 @@ export interface InvoiceParsedData {
   invoiceDate?: string | null
   sellerName?: string | null
   buyerName?: string | null
+  /** 购买方纳税人识别号（抵扣时用于核对抬头是否为本公司） */
+  buyerTaxNo?: string | null
+  /** 票面标题（区分专票/普票/数电票），能否抵扣的前提 */
+  voucherTitle?: string | null
+  /** 票面/反推税率，小数形式字符串如 "0.13"；火车票固定 "0.09" */
+  taxRate?: string | null
   amount?: string | null
   taxAmount?: string | null
   totalAmount?: string | null
@@ -165,6 +171,55 @@ export interface InvoiceParsedData {
 
 /** 发票列表排序方式 */
 export type InvoiceSortKey = 'uploadedAt' | 'invoiceDate'
+
+// ============ 进项抵扣台账 ============
+
+/** 抵扣状态：未勾选 / 已勾选 / 已抵扣 / 进项转出 */
+export type DeductionStatus = 'unconfirmed' | 'selected' | 'deducted' | 'transferred_out'
+
+/** 进项抵扣台账单行（后端 GET /api/deductions 返回） */
+export interface DeductionRow {
+  id: string
+  invoiceId: string
+  /** 凭证类别（专票/普票/铁路电子客票/机动车...） */
+  voucherKind: string | null
+  /** 是否可抵扣 */
+  canDeduct: boolean
+  /** 税率（小数形式字符串，如 "0.13"） */
+  taxRate: string | null
+  /** 不含税金额 */
+  taxExclusiveAmount: string | null
+  /** 可抵扣进项税额 */
+  deductibleTax: string | null
+  status: DeductionStatus
+  /** 申报所属期，如 "2026-08" */
+  declarePeriod: string | null
+  note: string | null
+  confirmedAt: string | null
+  invoice: {
+    id: string
+    invoiceNumber: string | null
+    invoiceType: string | null
+    ownerName: string | null
+    fileName: string | null
+    /** 已关联报销单的次数 */
+    linkedCount: number
+    parsedData: InvoiceParsedData | null
+  }
+}
+
+/** 申报底稿汇总（后端 GET /api/deductions/summary 返回） */
+export interface DeductionSummary {
+  period: string | null
+  groups: Array<{
+    voucherKind: string
+    count: number
+    taxExclusiveAmount: string
+    deductibleTax: string
+  }>
+  totalExclusiveAmount: string
+  totalDeductibleTax: string
+}
 
 // ============ 报销管理 ============
 

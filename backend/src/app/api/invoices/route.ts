@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { parseInvoice, type ParsedInvoice } from '@/lib/invoiceParser'
+import { syncDeduction } from '@/lib/vatDeduction'
 import { writeFile, mkdir, unlink, readFile } from 'fs/promises'
 import { createHash } from 'crypto'
 import { execFileSync } from 'child_process'
@@ -181,6 +182,8 @@ export async function POST(req: NextRequest) {
       })
       await unlink(absPath).catch(() => {}) // 丢弃本次新写入的文件，复用原记录文件
       updated.push(inv)
+      // 同步进项抵扣台账（解析结果变化时刷新）
+      if (parsed) await syncDeduction(inv.id, parsed as any, inv.invoiceType).catch(() => {})
       return
     }
 
@@ -202,6 +205,8 @@ export async function POST(req: NextRequest) {
       },
     })
     created.push(inv)
+    // 同步进项抵扣台账（新发票解析完成即建行）
+    if (parsed) await syncDeduction(inv.id, parsed as any, inv.invoiceType).catch(() => {})
   }
 
   for (const file of files) {

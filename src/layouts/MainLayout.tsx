@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Avatar, Breadcrumb, Dropdown, Layout, Menu, Space } from 'antd'
 import {
   BarChartOutlined,
+  ContainerOutlined,
   DashboardOutlined,
   FileTextOutlined,
   LogoutOutlined,
@@ -23,6 +24,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/accounts': '账户管理',
   '/invoices': '发票管理',
   '/reimbursements': '报销管理',
+  '/deductions': '进项抵扣',
   '/reports': '统计报表',
   '/settings': '系统设置',
   '/users': '用户管理',
@@ -52,6 +54,7 @@ export default function MainLayout() {
     { key: '/accounts', icon: <WalletOutlined />, label: '账户管理' },
     { key: '/invoices', icon: <FileTextOutlined />, label: '发票管理' },
     { key: '/reimbursements', icon: <ReconciliationOutlined />, label: '报销管理' },
+    { key: '/deductions', icon: <ContainerOutlined />, label: '进项抵扣' },
     { key: '/reports', icon: <BarChartOutlined />, label: '统计报表' },
     { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
     // 仅超级管理员可见：用户管理（普通用户不显示此项，且后端也会拒绝访问）

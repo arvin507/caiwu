@@ -30,10 +30,53 @@ model Invoice {
 
   // 反向关系：一张发票可通过关联表挂到多条报销明细/行程段（支持 1:N 与 N:1）
   links InvoiceLink[]
+  // 进项抵扣台账（1:1，抵扣动作是公司级，独立于报销关联）
+  deduction InvoiceDeduction?
 
   @@index([invoiceNumber])
   @@map("invoices")
 }
+
+/// 进项抵扣台账（与发票 1:1）
+/// 定位：本系统做「进项抵扣台账 + 申报底稿生成器」，不替代税务数字账户
+/// （实际勾选动作仍在税务局平台手动完成，系统只记录状态并汇总）。
+/// 可抵扣判定 + 税额计算由后端规则引擎（vatDeduction）基于发票 parsedData 算出，
+/// 这里持久化计算结果 + 用户人工维护的勾选状态/申报所属期。
+model InvoiceDeduction {
+  id                  String   @id @default(cuid())
+  invoiceId           String   @unique
+  invoice             Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  // ── 规则引擎算出的结果（发票重识别/批量重算后刷新）──
+  /// 凭证类别标签（如 增值税专用发票 / 增值税普通发票 / 铁路电子客票 / 机动车销售统一发票 / 电子发票）
+  voucherKind        String?
+  /// 是否可抵扣（专票/数电专票/铁路电子客票/机动车/海关缴款书等可抵，普票不可抵）
+  canDeduct          Boolean  @default(false)
+  /// 税率（小数形式字符串，如 "0.13"；火车票固定 "0.09"）
+  taxRate            String?
+  /// 不含税金额
+  taxExclusiveAmount String?
+  /// 可抵扣进项税额
+  deductibleTax       String?
+
+  // ── 用户维护的状态（人工在台账页标记）──
+  /// 勾选/抵扣状态：unconfirmed 未勾选 | selected 已勾选 | deducted 已申报抵扣 | transferred_out 进项转出
+  status             String   @default("unconfirmed")
+  /// 申报所属期，如 "2026-08"（用于按期汇总生成申报底稿）
+  declarePeriod      String?
+  /// 确认（勾选）时间
+  confirmedAt        DateTime?
+  /// 备注（如进项转出原因）
+  note               String? @db.Text
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([status])
+  @@index([declarePeriod])
+  @@map("invoice_deductions")
+}
+
 
 /// 系统用户表：支持「超级管理员(admin) / 普通用户(user)」两级角色
 /// 密码一律存 bcrypt 哈希，绝不保存明文
