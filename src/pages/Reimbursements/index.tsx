@@ -227,6 +227,19 @@ export default function Reimbursements() {
       render: (v: string) => <Typography.Text strong>{money(v)}</Typography.Text>,
     },
     {
+      title: '发票差额',
+      key: 'invoiceShortfall',
+      render: (_: unknown, row: Row) => {
+        const short = rebShortfall(row)
+        if (short <= 0) return <Typography.Text type="secondary">—</Typography.Text>
+        return (
+          <Typography.Text style={{ color: '#cf1322' }} strong>
+            缺 {money(short)}
+          </Typography.Text>
+        )
+      },
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
@@ -280,31 +293,131 @@ export default function Reimbursements() {
     },
   ]
 
+  // 单张发票行的报销金额：分摊额优先，否则取发票本身价税合计（一行多票场景）
+  const invoiceAmount = (l: { allocatedAmount?: string | null; invoice?: { parsedData?: { totalAmount?: string | null } | null } | null }): string => {
+    if (l.allocatedAmount) return money(l.allocatedAmount)
+    const t = l.invoice?.parsedData?.totalAmount
+    if (t != null && t !== '') return money(t)
+    return '—'
+  }
+  const invoiceLabel = (l: { invoice?: { invoiceNumber?: string | null; fileName?: string | null; parsedData?: { departureStation?: string | null; arrivalStation?: string | null; trainNo?: string | null; invoiceType?: string } | null } | null }): string => {
+    const inv = l.invoice
+    if (!inv) return '发票'
+    if (inv.parsedData?.invoiceType === 'train') {
+      const trip = `${inv.parsedData?.departureStation ?? ''}→${inv.parsedData?.arrivalStation ?? ''} ${inv.parsedData?.trainNo ?? ''}`.trim()
+      return trip || inv.invoiceNumber || inv.fileName || '火车票'
+    }
+    return inv.invoiceNumber || inv.fileName || '发票'
+  }
+  // 一行已关联发票的报销金额合计
+  const lineLinkedTotal = (links?: { allocatedAmount?: string | null; invoice?: { parsedData?: { totalAmount?: string | null } | null } | null }[]): number =>
+    (links ?? []).reduce((s, l) => {
+      if (l.allocatedAmount) return s + Number(l.allocatedAmount)
+      const t = l.invoice?.parsedData?.totalAmount
+      return s + (t != null && t !== '' ? Number(t) : 0)
+    }, 0)
+  // 一行发票是否不足（差额 > 0.005 视为不足，规避浮点）
+  const lineShortfall = (lineAmount: number, links?: { allocatedAmount?: string | null; invoice?: { parsedData?: { totalAmount?: string | null } | null } | null }[]): number => {
+    const diff = lineAmount - lineLinkedTotal(links)
+    return diff > 0.005 ? diff : 0
+  }
+  // 整单已挂发票合计（明细项 + 行程段 所有关联发票报销金额之和）
+  const rebLinkedTotal = (r: Reimbursement): number => {
+    const lines = [...(r.items ?? []), ...(r.legs ?? [])] as { links?: { allocatedAmount?: string | null; invoice?: { parsedData?: { totalAmount?: string | null } | null } | null }[] }[]
+    return lines.reduce((s, ln) => s + lineLinkedTotal(ln.links), 0)
+  }
+  // 整单发票是否不足（差额 > 0.005 视为不足，规避浮点）
+  const rebShortfall = (r: Reimbursement): number => {
+    const diff = Number(r.totalAmount) - rebLinkedTotal(r)
+    return diff > 0.005 ? diff : 0
+  }
+
   // 展开行里「发票」单元格（明细项 / 行程段通用，按 lineType 区分）
-  // 渲染该行已关联的发票列表（支持 1:N 多张；N:1 时显示分摊额）
+  //  - 仅 1 张（或 0 张）：紧凑单行（标签 + 金额 同行）
+  //  - 多张（1:N）：每条发票独立一行卡片，展示该发票报销金额
+  // 行尾统一展示本行发票合计 / 差额（不足标红）
   const renderInvoiceCell = (
-    line: { id: string; links?: { id: string; invoiceId: string; invoice?: { invoiceNumber?: string | null; fileName?: string | null } | null; allocatedAmount?: string | null }[] },
+    line: { id: string; amount: string; links?: { id: string; invoiceId: string; invoice?: { invoiceNumber?: string | null; fileName?: string | null; parsedData?: { totalAmount?: string | null; invoiceType?: string; departureStation?: string | null; arrivalStation?: string | null; trainNo?: string | null } | null } | null; allocatedAmount?: string | null }[] },
     type: 'item' | 'leg',
     rebId: string,
     applicantName: string,
-  ) => (
-    <Space wrap size={[4, 4]} style={{ width: '100%' }} align="start">
-      {(line.links ?? []).map((l) => (
-        <Space size="small" key={l.id} wrap>
-          <Tag color="success">
-            {l.invoice?.invoiceNumber || l.invoice?.fileName || '发票'}
-            {l.allocatedAmount ? ` 分摊¥${l.allocatedAmount}` : ''}
-          </Tag>
-          <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
-            查看
-          </Button>
-        </Space>
-      ))}
-      <Button type="link" size="small" onClick={() => openLink(type, line.id, rebId, applicantName)}>
-        关联
-      </Button>
-    </Space>
-  )
+  ) => {
+    const links = line.links ?? []
+    const lineAmt = Number(line.amount || 0)
+    const renderShortfall = () => {
+      const short = lineShortfall(lineAmt, links)
+      if (short <= 0) return null
+      return (
+        <div style={{ fontSize: 12, marginTop: 2 }}>
+          <Typography.Text type="secondary">发票合计 {money(lineLinkedTotal(links))}</Typography.Text>
+          <Typography.Text style={{ color: '#cf1322', marginLeft: 8 }}>差额 {money(short)}</Typography.Text>
+        </div>
+      )
+    }
+    if (links.length <= 1) {
+      const l = links[0]
+      return (
+        <div>
+          <Space size="small" wrap align="center">
+            {l ? (
+              <>
+                <Tag color="success" style={{ marginRight: 0 }}>
+                  {invoiceLabel(l)}
+                </Tag>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {invoiceAmount(l)}
+                </Typography.Text>
+                <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
+                  查看
+                </Button>
+              </>
+            ) : null}
+            <Button type="link" size="small" onClick={() => openLink(type, line.id, rebId, applicantName)}>
+              关联
+            </Button>
+          </Space>
+          {renderShortfall()}
+        </div>
+      )
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+        {links.map((l) => (
+          <div
+            key={l.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '4px 8px',
+              background: '#f6ffed',
+              border: '1px solid #b7eb8f',
+              borderRadius: 6,
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <Tag color="success" style={{ marginRight: 6 }}>
+                {invoiceLabel(l)}
+              </Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                发票金额 {invoiceAmount(l)}
+              </Typography.Text>
+            </span>
+            <Space size="small" wrap>
+              <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
+                查看
+              </Button>
+            </Space>
+          </div>
+        ))}
+        <Button type="link" size="small" style={{ paddingLeft: 0 }} onClick={() => openLink(type, line.id, rebId, applicantName)}>
+          关联
+        </Button>
+        {renderShortfall()}
+      </div>
+    )
+  }
 
   // 展开行：展示该报销单的明细。差旅展示「行程段 + 费用明细」，一般展示「费用明细」。
   const expandedRowRender = (row: Row): ReactNode => {
@@ -329,6 +442,7 @@ export default function Reimbursements() {
                   {
                     title: '发票',
                     key: 'invoice',
+                    width: 260,
                     render: (_, r) => renderInvoiceCell(r, 'leg', row.id, row.applicantName),
                   },
                 ]}
@@ -349,6 +463,7 @@ export default function Reimbursements() {
                   {
                     title: '发票',
                     key: 'invoice',
+                    width: 260,
                     render: (_, r) => renderInvoiceCell(r, 'item', row.id, row.applicantName),
                   },
                 ]}

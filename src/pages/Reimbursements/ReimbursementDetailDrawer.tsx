@@ -137,39 +137,149 @@ export default function ReimbursementDetailDrawer({
     }
   }
 
-  // 渲染一行已关联的发票列表（支持 1:N：多张发票；N:1：allocatedAmount 分摊额）
+  // 单张发票的报销金额（数值）：分摊额优先，否则取发票本身价税合计
+  const invoiceAmountNum = (l: InvoiceLink): number => {
+    if (l.allocatedAmount) return Number(l.allocatedAmount) // N:1 分摊
+    const t = l.invoice?.parsedData?.totalAmount
+    if (t != null && t !== '') return Number(t) // 1:N 一行多票：取该发票价税合计
+    return 0
+  }
+  const invoiceAmount = (l: InvoiceLink): string => {
+    const n = invoiceAmountNum(l)
+    return n > 0 ? money(n) : '—'
+  }
+  const invoiceLabel = (l: InvoiceLink): string => {
+    const inv = l.invoice
+    if (!inv) return '发票'
+    if (inv.invoiceType === 'train') {
+      const trip = `${inv.parsedData?.departureStation ?? ''}→${inv.parsedData?.arrivalStation ?? ''} ${inv.parsedData?.trainNo ?? ''}`.trim()
+      return trip || inv.invoiceNumber || inv.fileName || '火车票'
+    }
+    return inv.invoiceNumber || inv.fileName || '发票'
+  }
+  // 一条明细/行程段已关联发票的报销金额合计
+  const lineLinkedTotal = (links?: InvoiceLink[]): number =>
+    (links ?? []).reduce((s, l) => s + invoiceAmountNum(l), 0)
+  // 一条明细发票是否不足（差额 > 0.005 视为不足，规避浮点）
+  const lineShortfall = (lineAmount: number, links?: InvoiceLink[]): number => {
+    const diff = lineAmount - lineLinkedTotal(links)
+    return diff > 0.005 ? diff : 0
+  }
+
+  // 渲染一行已关联的发票列表：
+  // 一行已关联发票的「合计 / 差额」提示（差额>0 标红）
+  const ShortfallHint = ({ lineAmount, links }: { lineAmount: number; links?: InvoiceLink[] }) => {
+    const total = lineLinkedTotal(links)
+    const short = lineShortfall(lineAmount, links)
+    return (
+      <div style={{ fontSize: 12, marginTop: 2 }}>
+        <Typography.Text type="secondary">发票合计 {money(total)}</Typography.Text>
+        {short > 0 ? (
+          <Typography.Text style={{ color: '#cf1322', marginLeft: 8 }}>
+            差额 {money(short)}
+          </Typography.Text>
+        ) : null}
+      </div>
+    )
+  }
+
+  // 整单发票报销金额合计（所有明细项 + 行程段关联的发票金额之和）
+  const rebInvoiceTotal = (): number => {
+    if (!reb) return 0
+    const items = (reb.items ?? []).reduce((s, it) => s + lineLinkedTotal(it.links), 0)
+    const legs = (reb.legs ?? []).reduce((s, lg) => s + lineLinkedTotal(lg.links), 0)
+    return items + legs
+  }
+
+  // 渲染一行已关联的发票列表：
+  //  - 仅 1 张（或 0 张）：紧凑单行展示（标签 + 金额 同行），不堆卡片
+  //  - 多张（1:N）：每条发票独立展示一行卡片（支持 N:1 分摊额）
+  // 行尾统一展示本行发票合计 / 差额（不足标红）
   const renderLinkedInvoices = (
-    line: { id: string; links?: InvoiceLink[] },
+    line: { id: string; amount: string | number; links?: InvoiceLink[] },
     type: 'item' | 'leg',
-  ) => (
-    <Space wrap size={[4, 4]} style={{ width: '100%' }} align="start">
-      {(line.links ?? []).map((l) => (
-        <Space size="small" key={l.id} wrap>
-          <Tag color="success">
-            {l.invoice?.invoiceType === 'train'
-              ? `${l.invoice?.parsedData?.departureStation ?? ''}→${l.invoice?.parsedData?.arrivalStation ?? ''} ${l.invoice?.parsedData?.trainNo ?? ''}`.trim() ||
-                (l.invoice?.invoiceNumber || l.invoice?.fileName || '火车票')
-              : (l.invoice?.invoiceNumber || l.invoice?.fileName || '发票')}
-            {l.allocatedAmount ? ` 分摊¥${l.allocatedAmount}` : ''}
-          </Tag>
-          <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
-            查看
-          </Button>
-          <Popconfirm
-            title="解除该发票与本行的关联？"
-            onConfirm={() => handleUnlink(type, line.id, l.invoiceId)}
-          >
-            <Button type="link" size="small" danger>
-              解除
+  ) => {
+    const links = line.links ?? []
+    if (links.length <= 1) {
+      const l = links[0]
+      return (
+        <div>
+          <Space size="small" wrap align="center">
+            {l ? (
+              <>
+                <Tag color="success" style={{ marginRight: 0 }}>
+                  {invoiceLabel(l)}
+                </Tag>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  {invoiceAmount(l)}
+                </Typography.Text>
+                <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
+                  查看
+                </Button>
+                <Popconfirm
+                  title="解除该发票与本行的关联？"
+                  onConfirm={() => handleUnlink(type, line.id, l.invoiceId)}
+                >
+                  <Button type="link" size="small" danger>
+                    解除
+                  </Button>
+                </Popconfirm>
+              </>
+            ) : null}
+            <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
+              关联
             </Button>
-          </Popconfirm>
-        </Space>
-      ))}
-      <Button type="link" size="small" onClick={() => openLink(type, line.id)}>
-        关联
-      </Button>
-    </Space>
-  )
+          </Space>
+          <ShortfallHint lineAmount={Number(line.amount)} links={links} />
+        </div>
+      )
+    }
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: '100%' }}>
+        {links.map((l) => (
+          <div
+            key={l.id}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '4px 8px',
+              background: '#f6ffed',
+              border: '1px solid #b7eb8f',
+              borderRadius: 6,
+            }}
+          >
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <Tag color="success" style={{ marginRight: 6 }}>
+                {invoiceLabel(l)}
+              </Tag>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                发票金额 {invoiceAmount(l)}
+              </Typography.Text>
+            </span>
+            <Space size="small" wrap>
+              <Button type="link" size="small" onClick={() => previewInvoice(l.invoiceId)}>
+                查看
+              </Button>
+              <Popconfirm
+                title="解除该发票与本行的关联？"
+                onConfirm={() => handleUnlink(type, line.id, l.invoiceId)}
+              >
+                <Button type="link" size="small" danger>
+                  解除
+                </Button>
+              </Popconfirm>
+            </Space>
+          </div>
+        ))}
+        <Button type="link" size="small" style={{ paddingLeft: 0 }} onClick={() => openLink(type, line.id)}>
+          关联
+        </Button>
+        <ShortfallHint lineAmount={Number(line.amount)} links={links} />
+      </div>
+    )
+  }
 
   const callStatus = async (action: string, reason?: string) => {
     if (!reb) return
@@ -236,6 +346,7 @@ export default function ReimbursementDetailDrawer({
     {
       title: '发票',
       key: 'invoice',
+      width: 260,
       render: (_: unknown, r: ReimbursementLeg) => renderLinkedInvoices(r, 'leg'),
     },
   ]
@@ -255,6 +366,7 @@ export default function ReimbursementDetailDrawer({
     {
       title: '发票',
       key: 'invoice',
+      width: 260,
       render: (_: unknown, r: ReimbursementItem) => renderLinkedInvoices(r, 'item'),
     },
   ]
@@ -309,9 +421,25 @@ export default function ReimbursementDetailDrawer({
                 {reb.applyDate ? formatDate(reb.applyDate) : '—'}
               </Descriptions.Item>
               <Descriptions.Item label="合计金额">
-                <Typography.Text strong style={{ color: '#cf1322', fontSize: 16 }}>
-                  {money(reb.totalAmount)}
-                </Typography.Text>
+                <div>
+                  <Typography.Text strong style={{ color: '#cf1322', fontSize: 16 }}>
+                    {money(reb.totalAmount)}
+                  </Typography.Text>
+                  {(() => {
+                    const invTotal = rebInvoiceTotal()
+                    const short = Number(reb.totalAmount) - invTotal
+                    return short > 0.005 ? (
+                      <div style={{ marginTop: 2 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          已挂发票合计 {money(invTotal)}
+                        </Typography.Text>
+                        <Typography.Text style={{ color: '#cf1322', fontSize: 12, marginLeft: 8 }}>
+                          发票差额 {money(short)}
+                        </Typography.Text>
+                      </div>
+                    ) : null
+                  })()}
+                </div>
               </Descriptions.Item>
               <Descriptions.Item label="文件名">
                 {reb.fileName || '—'}
