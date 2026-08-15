@@ -153,6 +153,8 @@ export default function Reimbursements() {
 
   // 关联发票弹窗状态
   const [linkOpen, setLinkOpen] = useState(false)
+  // 每页条数（受控，切换即刷新）
+  const [pageSize, setLocalPageSize] = useState(getPageSize())
   const [linkLine, setLinkLine] = useState<{
     type: 'item' | 'leg'
     id: string
@@ -740,10 +742,13 @@ export default function Reimbursements() {
               onChange: (keys) => setSelectedRowKeys(keys as string[]),
             }}
             pagination={{
-              pageSize: getPageSize(),
+              pageSize,
               showSizeChanger: true,
               pageSizeOptions: PAGE_SIZE_OPTIONS,
-              onShowSizeChange: (_current, size) => setPageSize(size),
+              onShowSizeChange: (_current, size) => {
+                setLocalPageSize(size)
+                setPageSize(size)
+              },
             }}
           />
         )}

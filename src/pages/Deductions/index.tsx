@@ -71,7 +71,9 @@ export default function Deductions() {
   const [period, setPeriod] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [kind, setKind] = useState<string | null>(null)
-  const [deductibleOnly, setDeductibleOnly] = useState(false)
+  const [deductible, setDeductible] = useState<'all' | 'yes' | 'no'>('all')
+  // 每页条数（受控，切换即刷新）
+  const [pageSize, setLocalPageSize] = useState(getPageSize())
 
   // 标记弹窗
   const [markOpen, setMarkOpen] = useState(false)
@@ -103,7 +105,8 @@ export default function Deductions() {
       if (period) qs.set('period', period)
       if (status) qs.set('status', status)
       if (kind) qs.set('kind', kind)
-      if (deductibleOnly) qs.set('deductibleOnly', '1')
+      if (deductible === 'yes') qs.set('canDeduct', '1')
+      else if (deductible === 'no') qs.set('canDeduct', '0')
       const res = await fetch(`/api/deductions?${qs.toString()}`)
       if (!res.ok) throw new Error('加载抵扣台账失败')
       const data = (await res.json()) as DeductionRow[]
@@ -113,7 +116,7 @@ export default function Deductions() {
     } finally {
       setLoading(false)
     }
-  }, [period, status, kind, deductibleOnly, message])
+  }, [period, status, kind, deductible, message])
 
   const loadSummary = useCallback(async () => {
     setSummaryLoading(true)
@@ -428,13 +431,14 @@ export default function Deductions() {
                     options={kindOptions}
                   />
                   <Select
-                    placeholder="范围"
+                    placeholder="是否可抵扣"
                     style={{ width: 140 }}
-                    value={deductibleOnly ? '1' : '0'}
-                    onChange={(v) => setDeductibleOnly(v === '1')}
+                    allowClear
+                    value={deductible === 'all' ? undefined : deductible}
+                    onChange={(v) => setDeductible(v ?? 'all')}
                     options={[
-                      { value: '0', label: '全部' },
-                      { value: '1', label: '只看可抵扣' },
+                      { value: 'yes', label: '可抵扣' },
+                      { value: 'no', label: '不可抵扣' },
                     ]}
                   />
                   <Button icon={<ReloadOutlined />} onClick={recalc}>
@@ -488,10 +492,13 @@ export default function Deductions() {
                   loading={loading}
                   scroll={{ x: 'max-content' }}
                   pagination={{
-                    pageSize: getPageSize(),
+                    pageSize,
                     showSizeChanger: true,
                     pageSizeOptions: PAGE_SIZE_OPTIONS,
-                    onShowSizeChange: (_current, size) => setPageSize(size),
+                    onShowSizeChange: (_current, size) => {
+                      setLocalPageSize(size)
+                      setPageSize(size)
+                    },
                   }}
                   rowSelection={rowSelection}
                 />

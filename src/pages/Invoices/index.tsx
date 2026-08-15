@@ -63,6 +63,8 @@ export default function Invoices() {
   const [batchDeleting, setBatchDeleting] = useState(false)
   // 多选批量删除：当前选中的行 id
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  // 每页条数（受控，切换即刷新）
+  const [pageSize, setLocalPageSize] = useState(getPageSize())
 
   const openDetail = (inv: Invoice) => {
     setActiveInvoice(inv)
@@ -342,10 +344,13 @@ export default function Invoices() {
           }}
           scroll={{ x: 'max-content' }}
           pagination={{
-            pageSize: getPageSize(),
+            pageSize,
             showSizeChanger: true,
             pageSizeOptions: PAGE_SIZE_OPTIONS,
-            onShowSizeChange: (_current, size) => setPageSize(size),
+            onShowSizeChange: (_current, size) => {
+              setLocalPageSize(size)
+              setPageSize(size)
+            },
           }}
         />
       )}

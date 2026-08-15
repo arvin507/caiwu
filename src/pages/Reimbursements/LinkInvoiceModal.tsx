@@ -53,6 +53,8 @@ export default function LinkInvoiceModal({
   const [loading, setLoading] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  // 每页条数（受控，切换即刷新）
+  const [pageSize, setLocalPageSize] = useState(getPageSize())
 
   // 打开时拉取可关联发票列表
   useEffect(() => {
@@ -229,10 +231,13 @@ export default function LinkInvoiceModal({
         columns={columns}
         dataSource={list}
         pagination={{
-          pageSize: getPageSize(),
+          pageSize,
           showSizeChanger: true,
           pageSizeOptions: PAGE_SIZE_OPTIONS,
-          onShowSizeChange: (_current, size) => setPageSize(size),
+          onShowSizeChange: (_current, size) => {
+            setLocalPageSize(size)
+            setPageSize(size)
+          },
         }}
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as string[]) }}
       />

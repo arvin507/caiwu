@@ -11,7 +11,8 @@ export const runtime = 'nodejs'
  *   period        申报所属期精确匹配，如 2026-08
  *   status        勾选状态：unconfirmed|selected|deducted|transferred_out
  *   kind          凭证类别精确匹配（voucherKind）
- *   deductibleOnly=1  只看可抵扣
+ *   canDeduct     是否可抵扣：1=只看可抵扣，0=只看不可抵扣（未传=全部，兼容旧 deductibleOnly=1）
+ *   deductibleOnly=1  只看可抵扣（兼容旧参数）
  * 行为：自动为「已解析但尚无抵扣行」的发票补建记录，再按条件过滤返回。
  */
 export async function GET(req: NextRequest) {
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest) {
   const status = sp.get('status')?.trim() || ''
   const kind = sp.get('kind')?.trim() || ''
   const deductibleOnly = sp.get('deductibleOnly') === '1'
+  const canDeductParam = sp.get('canDeduct')?.trim() || ''
 
   // 1) 补建缺失的抵扣行（每张已解析发票都应有一行台账）
   const missing = await prisma.invoice.findMany({
@@ -35,7 +37,10 @@ export async function GET(req: NextRequest) {
   if (status) where.status = status
   if (period) where.declarePeriod = period
   if (kind) where.voucherKind = kind
-  if (deductibleOnly) where.canDeduct = true
+  // 是否可抵扣：canDeduct=1 只看可抵扣；canDeduct=0 只看不可抵扣；未传则全部（兼容旧 deductibleOnly=1）
+  if (canDeductParam === '1') where.canDeduct = true
+  else if (canDeductParam === '0') where.canDeduct = false
+  else if (deductibleOnly) where.canDeduct = true
 
   const rows = await prisma.invoiceDeduction.findMany({
     where,

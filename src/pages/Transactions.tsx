@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Table, Tag, Typography } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { TRANSACTION_TYPE_LABEL } from '@/constants'
@@ -29,6 +29,9 @@ export default function Transactions() {
     () => Object.fromEntries(accounts.map((a) => [a.id, a])),
     [accounts],
   )
+
+  // 每页条数（受控，切换即刷新）
+  const [pageSize, setLocalPageSize] = useState(getPageSize())
 
   const rows: Row[] = transactions.map((t) => ({
     ...t,
@@ -73,10 +76,13 @@ export default function Transactions() {
         dataSource={rows}
         columns={columns}
         pagination={{
-          pageSize: getPageSize(),
+          pageSize,
           showSizeChanger: true,
           pageSizeOptions: PAGE_SIZE_OPTIONS,
-          onShowSizeChange: (_current, size) => setPageSize(size),
+          onShowSizeChange: (_current, size) => {
+            setLocalPageSize(size)
+            setPageSize(size)
+          },
         }}
       />
     </div>
