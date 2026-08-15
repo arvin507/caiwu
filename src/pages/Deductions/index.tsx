@@ -28,6 +28,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
+import { getPageSize, setPageSize, PAGE_SIZE_OPTIONS } from '@/utils/pageSize'
 import type { DeductionRow, DeductionStatus, DeductionSummary } from '@/types'
 
 const { Title, Text } = Typography
@@ -486,7 +487,12 @@ export default function Deductions() {
                   columns={ledgerColumns}
                   loading={loading}
                   scroll={{ x: 'max-content' }}
-                  pagination={{ pageSize: 10 }}
+                  pagination={{
+                    pageSize: getPageSize(),
+                    showSizeChanger: true,
+                    pageSizeOptions: PAGE_SIZE_OPTIONS,
+                    onShowSizeChange: (_current, size) => setPageSize(size),
+                  }}
                   rowSelection={rowSelection}
                 />
 

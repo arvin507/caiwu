@@ -5,6 +5,7 @@ import { TRANSACTION_TYPE_LABEL } from '@/constants'
 import { useAppStore } from '@/store/useAppStore'
 import type { Transaction } from '@/types'
 import { formatSignedCurrency } from '@/utils/format'
+import { getPageSize, setPageSize, PAGE_SIZE_OPTIONS } from '@/utils/pageSize'
 
 type Row = Transaction & { key: string; categoryName?: string; accountName?: string }
 
@@ -67,7 +68,17 @@ export default function Transactions() {
   return (
     <div>
       <Typography.Title level={3}>账单明细</Typography.Title>
-      <Table<Row> rowKey="id" dataSource={rows} columns={columns} pagination={{ pageSize: 10 }} />
+      <Table<Row>
+        rowKey="id"
+        dataSource={rows}
+        columns={columns}
+        pagination={{
+          pageSize: getPageSize(),
+          showSizeChanger: true,
+          pageSizeOptions: PAGE_SIZE_OPTIONS,
+          onShowSizeChange: (_current, size) => setPageSize(size),
+        }}
+      />
     </div>
   )
 }

@@ -5,6 +5,7 @@ import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, InvoiceSortKey } from '@/types'
 import { formatDate } from '@/utils/format'
+import { getPageSize, setPageSize, PAGE_SIZE_OPTIONS } from '@/utils/pageSize'
 import dayjs from 'dayjs'
 import { openFilePreview } from '@/utils/openFilePreview'
 import UploadModal from './UploadModal'
@@ -340,7 +341,12 @@ export default function Invoices() {
             rowExpandable: (row) => !!row.parsedData,
           }}
           scroll={{ x: 'max-content' }}
-          pagination={{ pageSize: 10 }}
+          pagination={{
+            pageSize: getPageSize(),
+            showSizeChanger: true,
+            pageSizeOptions: PAGE_SIZE_OPTIONS,
+            onShowSizeChange: (_current, size) => setPageSize(size),
+          }}
         />
       )}
 

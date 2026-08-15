@@ -34,6 +34,7 @@ import type {
 import { formatDate } from '@/utils/format'
 import dayjs from 'dayjs'
 import { openFilePreview } from '@/utils/openFilePreview'
+import { getPageSize, setPageSize, PAGE_SIZE_OPTIONS } from '@/utils/pageSize'
 import UploadModal from './UploadModal'
 import LinkInvoiceModal from './LinkInvoiceModal'
 import UploadAndLinkModal from './UploadAndLinkModal'
@@ -738,7 +739,12 @@ export default function Reimbursements() {
               selectedRowKeys,
               onChange: (keys) => setSelectedRowKeys(keys as string[]),
             }}
-            pagination={{ pageSize: 10 }}
+            pagination={{
+              pageSize: getPageSize(),
+              showSizeChanger: true,
+              pageSizeOptions: PAGE_SIZE_OPTIONS,
+              onShowSizeChange: (_current, size) => setPageSize(size),
+            }}
           />
         )}
       </Card>

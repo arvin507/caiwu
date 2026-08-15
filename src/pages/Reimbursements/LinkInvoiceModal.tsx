@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/useAppStore'
 import type { Invoice, Reimbursement } from '@/types'
 import { formatDate } from '@/utils/format'
 import { openFilePreview } from '@/utils/openFilePreview'
+import { getPageSize, setPageSize, PAGE_SIZE_OPTIONS } from '@/utils/pageSize'
 
 /** /api/invoices/linkable 返回的发票，带关联标注（支持 N:1，故 linkedTo 为数组） */
 type LinkableInvoice = Invoice & {
@@ -227,7 +228,12 @@ export default function LinkInvoiceModal({
         loading={loading}
         columns={columns}
         dataSource={list}
-        pagination={{ pageSize: 8 }}
+        pagination={{
+          pageSize: getPageSize(),
+          showSizeChanger: true,
+          pageSizeOptions: PAGE_SIZE_OPTIONS,
+          onShowSizeChange: (_current, size) => setPageSize(size),
+        }}
         rowSelection={{ selectedRowKeys, onChange: (keys) => setSelectedRowKeys(keys as string[]) }}
       />
     </Modal>
