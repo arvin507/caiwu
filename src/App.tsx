@@ -1,7 +1,13 @@
 import { useEffect } from 'react'
 import { App as AntApp, ConfigProvider, Spin, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
+import dayjs from 'dayjs'
+import 'dayjs/locale/zh-cn'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+
+// DatePicker/月份选择面板的「月份」文字来自 dayjs 的 locale（antd 的 zh_CN 不含月份面板文案），
+// 不设置 dayjs locale 会导致月份弹窗显示英文月份。这里全局激活中文 locale。
+dayjs.locale('zh-cn')
 import MainLayout from '@/layouts/MainLayout'
 import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'

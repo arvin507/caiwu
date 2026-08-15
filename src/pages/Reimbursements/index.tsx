@@ -75,7 +75,11 @@ export default function Reimbursements() {
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(false)
   const [month, setMonth] = useState<string | null>(null)
+  // 页面级「上传报销单」弹窗（仅接受 Excel 报销单模板）
   const [uploadOpen, setUploadOpen] = useState(false)
+  // 列表展开行「上传发票」弹窗（上传发票并自动关联本行）—— 必须独立 state，
+  // 不能与 uploadOpen 共用，否则点击「上传发票」会同时弹出「上传报销单」。
+  const [uploadInvoiceOpen, setUploadInvoiceOpen] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)
   const [active, setActive] = useState<Reimbursement | null>(null)
   // 多选批量删除：当前选中的行 id
@@ -181,7 +185,7 @@ export default function Reimbursements() {
     applicantName: string,
   ) => {
     setUploadLine({ type, id, rebId, applicantName })
-    setUploadOpen(true)
+    setUploadInvoiceOpen(true)
   }
 
   // 解除某张发票与行的关联（列表展开行用：单张发票旁的「解除」）
@@ -770,15 +774,15 @@ export default function Reimbursements() {
       />
 
       <UploadAndLinkModal
-        open={uploadOpen}
+        open={uploadInvoiceOpen}
         reimbursementId={uploadLine?.rebId ?? ''}
         applicantName={uploadLine?.applicantName ?? ''}
         lineType={uploadLine?.type ?? 'item'}
         lineId={uploadLine?.id ?? ''}
-        onClose={() => setUploadOpen(false)}
+        onClose={() => setUploadInvoiceOpen(false)}
         onLinked={(updated) => {
           applyUpdated(updated)
-          setUploadOpen(false)
+          setUploadInvoiceOpen(false)
         }}
       />
     </div>
