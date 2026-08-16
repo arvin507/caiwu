@@ -20,11 +20,48 @@ import { prisma } from '@/lib/prisma'
 interface ParsedInvoiceLite {
   invoiceType?: 'vat' | 'train' | string | null
   voucherTitle?: string | null
+  rawText?: string | null
   taxRate?: string | null
   amount?: string | null
   taxAmount?: string | null
   totalAmount?: string | null
   [key: string]: unknown
+}
+
+/**
+ * 从票面原文兜底判定凭证专/普类别。
+ * 用于「voucherTitle 缺失（历史数据/OCR 漏抽）」时仍能正确区分专票与普票，
+ * 避免一张明显的专票因缺标题字段被误判为不可抵扣。
+ *   返回 'special' 增值税专用发票/电子专用发票等（可抵）
+ *        'motor'  机动车销售统一发票（可抵）
+ *        'normal' 增值税普通发票/电子普通发票（不可抵）
+ *        null     无法判定（保持安全默认：不可抵）
+ */
+function deriveVoucherClassFromText(text: string | null | undefined): 'special' | 'motor' | 'normal' | null {
+  if (!text) return null
+  const t = text.replace(/\s+/g, '')
+  if (t.includes('机动车销售统一发票')) return 'motor'
+  // 「专用发票」是专票的最强特征词（增值税专用发票/电子专用发票/数电专用发票）
+  if (t.includes('专用发票')) return 'special'
+  if (t.includes('增值税普通发票') || t.includes('电子普通发票') || t.includes('普通发票')) return 'normal'
+  return null
+}
+
+/**
+ * 解析凭证标题与是否专票类。
+ * 优先用结构化字段 voucherTitle；缺失时回退扫描 rawText。
+ */
+function resolveVoucherInfo(parsed: ParsedInvoiceLite): { title: string | null; isSpecial: boolean } {
+  const title = parsed.voucherTitle ?? null
+  if (title) {
+    const isSpecial = title.includes('专用') || title.includes('机动车销售统一发票')
+    return { title, isSpecial }
+  }
+  const klass = deriveVoucherClassFromText(parsed.rawText)
+  if (klass === 'special') return { title: '增值税专用发票', isSpecial: true }
+  if (klass === 'motor') return { title: '机动车销售统一发票', isSpecial: true }
+  if (klass === 'normal') return { title: '增值税普通发票', isSpecial: false }
+  return { title: null, isSpecial: false }
 }
 
 /** 抵扣状态机 */
@@ -102,10 +139,8 @@ export function computeDeduction(
   }
 
   // ── 增值税专/普票 ──
-  const title = parsed.voucherTitle ?? null
-  // 专票类（可抵）：增值税专用发票 / 数电增值税专用发票 / 机动车销售统一发票
-  const isSpecial =
-    !!title && (title.includes('专用') || title.includes('机动车销售统一发票'))
+  // 优先用结构化标题，缺失时回退扫描票面原文，避免专票被误判不可抵
+  const { title, isSpecial } = resolveVoucherInfo(parsed)
   const canDeduct = isSpecial
 
   const tax = toNum(parsed.taxAmount)

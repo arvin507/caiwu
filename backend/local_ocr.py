@@ -422,7 +422,9 @@ def extract_voucher_title(items):
       - 仅含「电子发票」且未标注专/普 → 视为未知（规则引擎按普票处理，可人工改）
     """
     blob = " ".join(it["text"] for it in items)
-    if "增值税专用发票" in blob or "电子专票" in blob or "增值税电子专用发票" in blob:
+    # 「专用发票」是专票最强特征词，优先匹配（兼容「增值税专用发票」「电子专用发票」
+    # 以及 OCR 把「增值税专用发票」切成多词导致「增值税专用发票」整串缺失的情况）
+    if "专用发票" in blob or "增值税专用发票" in blob or "电子专票" in blob or "增值税电子专用发票" in blob:
         return "增值税专用发票"
     if "机动车销售统一发票" in blob:
         return "机动车销售统一发票"
